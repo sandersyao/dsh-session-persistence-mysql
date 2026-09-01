@@ -15,5 +15,8 @@ export default defineConfig({
     "@deepseek-ai/dsh-session-persistence",
     "@deepseek-ai/dsh-invariants",
     "@deepseek-ai/cordis",
+    "mysql2",
+    "@deepseek-ai/schemastery",
+    "dotenv",
   ],
 });
