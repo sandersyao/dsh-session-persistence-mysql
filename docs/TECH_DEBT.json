@@ -1,0 +1,48 @@
+{
+  "project": "dsh-session-persistence-mysql",
+  "updatedAt": "2026-09-01",
+  "items": [
+    {
+      "id": "TD-001",
+      "title": "npm 全局缓存 root 属主 EPERM",
+      "description": "本地 /Users/yaoxiaowei/.npm 缓存含 root 属主文件，npm 命令报 EPERM。",
+      "mitigation": "项目内 .pnpm-store（.npmrc store-dir）绕开；CI 环境无此问题。",
+      "status": "open"
+    },
+    {
+      "id": "TD-002",
+      "title": "无删除/保留 API",
+      "description": "接缝 dsh-session-persistence 本身无删除/归档 API；pruning 是外部运维职责。",
+      "decision": "本插件默认不实现删除/归档，写入 README Known Limitations。",
+      "status": "accepted"
+    },
+    {
+      "id": "TD-003",
+      "title": "事件负载默认明文",
+      "description": "事件负载含敏感内容（对话/工具结果/请求头可能含 key）。",
+      "decision": "默认明文（与 JSONL 一致）并在 README 声明风险；预留 encryptionKey 字段级加密扩展位，暂不实现。",
+      "status": "accepted"
+    },
+    {
+      "id": "TD-004",
+      "title": "TLS/传输暂缓",
+      "description": "TLS/SSL 强制暂缓，届时可能由云服务商提供。",
+      "decision": "保留 sslRequired 配置位；安全测试暂缓 TLS 强制项。",
+      "status": "deferred"
+    },
+    {
+      "id": "TD-005",
+      "title": "v0.1.2-alpha.3 兼容",
+      "description": "官方已发布 v0.1.2-alpha.3，本项目 peer 对齐 ^0.1.1-rc.2。",
+      "decision": "本轮不做，靠高覆盖率（lines≥90）打底；后续再兼容。",
+      "status": "deferred"
+    },
+    {
+      "id": "TD-006",
+      "title": "list() 不分页不过滤",
+      "description": "接缝 list() 返回全部 materialized 会话，大库未分页。",
+      "decision": "按接缝契约实现，不做扩展；标 deferred。",
+      "status": "deferred"
+    }
+  ]
+}

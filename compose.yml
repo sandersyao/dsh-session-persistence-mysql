@@ -1,0 +1,23 @@
+services:
+  # 本地开发/测试用的 MySQL。本机已缓存 mysql:8.4（Docker Hub 在此环境不可达）。
+  mysql:
+    image: mysql:8.4
+    container_name: dsh-session-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_dev_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-dsh_session}
+      MYSQL_USER: ${MYSQL_USER:-dsh}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-dsh_dev_password}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-root_dev_password}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mysql_data:

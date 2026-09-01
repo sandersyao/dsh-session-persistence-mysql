@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+.pnpm-store/
+lib/
+dist/
+coverage/
+*.tsbuildinfo
+
+# 本地环境变量（含凭据，绝不提交）
+.env
+.env.local
+
+# 编辑器/系统
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# 测试临时数据
+.tmp/
+*.sqlite

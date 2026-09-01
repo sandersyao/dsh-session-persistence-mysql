@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22]
+    services:
+      # 内建 MySQL service 容器，避免 Docker-in-Docker
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root_dev_password
+          MYSQL_DATABASE: dsh_session
+          MYSQL_USER: dsh
+          MYSQL_PASSWORD: dsh_dev_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot_dev_password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      MYSQL_USER: dsh
+      MYSQL_PASSWORD: dsh_dev_password
+      MYSQL_DATABASE: dsh_session
+      MYSQL_TABLE_PREFIX: dsh_
+      # 读库留空 → 测试同库模式
+      MYSQL_READ_HOST: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - name: Build
+        run: pnpm build
+      - name: Test (unit)
+        run: pnpm test:unit
+      - name: Test (integration + e2e, with coverage gate)
+        run: pnpm test:coverage

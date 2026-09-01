@@ -1,0 +1,18 @@
+{
+  "id": "T1",
+  "title": "基础设施",
+  "status": "in_progress",
+  "dependsOn": [],
+  "owner": "repo-agent",
+  "acceptedCriteria": [
+    "git init 完成",
+    "脚手架文件齐备且能被依赖安装/类型检查/lint 验证",
+    "compose + .env 可启动本地 MySQL",
+    "CI workflow 就位",
+    "AGENTS.md 与 .agents/ 就位"
+  ],
+  "techDebt": [
+    "npm 全局缓存 root 属主 EPERM → 项目内 .pnpm-store 绕开"
+  ],
+  "handoffTo": "T2"
+}
