@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-`@deepseek-ai/dsh-session-persistence-mysql` —— DeepSeek Harness（dsh）的 **MySQL 会话持久化后端**。它是 `dsh-session-persistence` 能力接缝的一个 Provider：以 Cordis 插件形式加载，注册为 `ctx.sessionPersistence`，持久化 event-sourced 的 `SessionEvent` 日志。
+`@sandersyao/dsh-session-persistence-mysql` —— DeepSeek Harness（dsh）的 **MySQL 会话持久化后端**。它是 `dsh-session-persistence` 能力接缝的一个 Provider：以 Cordis 插件形式加载，注册为 `ctx.sessionPersistence`，持久化 event-sourced 的 `SessionEvent` 日志。
 
 ## 关键架构事实（先读文档，勿扫源码）
 
@@ -32,7 +32,7 @@ docker compose up -d    # 启动本地 MySQL（env 取自 .env）
 1. **类型声明**（`interface` / `type` / `class`）上方必须有**多行 JSDoc** `/** ... */`。
 2. **具名函数与方法**上方必须有**多行 JSDoc**。
 3. 所有**注释描述使用中文**（标识符、代码、日志保持英文）。
-4. **数据表与字段必须有注释**（DDL 内 `--` 注释，说明字段用途）。
+4. **数据表与字段必须有注释**（DDL 内每列用 `COMMENT '...'` 子句注明用途；表级 `COMMENT=` 只写表的一句话描述，不堆叠列注释）。
 5. 复杂/非显然逻辑：在实现上方补中文说明，解释「为什么」。
 6. 格式与 lint 由 Biome 统一（`biome check` 必须通过）。
 

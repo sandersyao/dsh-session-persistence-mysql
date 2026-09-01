@@ -5,7 +5,7 @@
     {
       "id": "TD-001",
       "title": "npm 全局缓存 root 属主 EPERM",
-      "description": "本地 /Users/yaoxiaowei/.npm 缓存含 root 属主文件，npm 命令报 EPERM。",
+      "description": "本地 $HOME/.npm 缓存含 root 属主文件，npm 命令报 EPERM。",
       "mitigation": "项目内 .pnpm-store（.npmrc store-dir）绕开；CI 环境无此问题。",
       "status": "open"
     },

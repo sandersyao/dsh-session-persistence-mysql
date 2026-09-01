@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-session-persistence-mysql",
+  "name": "@sandersyao/dsh-session-persistence-mysql",
   "version": "0.1.1-rc.2",
   "description": "MySQL durable session persistence backend for the DeepSeek Harness",
   "type": "module",
@@ -27,8 +27,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-    "directory": "packages/session/session-persistence-mysql"
+    "url": "git+https://github.com/sandersyao/dsh-session-persistence-mysql.git"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-session": "^0.1.1-rc.2",

@@ -1,11 +1,11 @@
 /**
  * 包级 invariant 伴生插件，对齐 `dsh-session-persistence-jsonl` 惯例。
  * 本后端无可观察的进程内关系需持续校验；正确性依赖后端往返与崩溃测试。
- * @module @deepseek-ai/dsh-session-persistence-mysql/invariant
+ * @module @sandersyao/dsh-session-persistence-mysql/invariant
  */
 
 /** 包名，用于注册。 */
-const PACKAGE_NAME = "@deepseek-ai/dsh-session-persistence-mysql";
+const PACKAGE_NAME = "@sandersyao/dsh-session-persistence-mysql";
 
 /** Cordis 伴生插件名。 */
 export const name = "session-persistence-mysql-invariant";

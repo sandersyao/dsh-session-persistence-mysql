@@ -37,7 +37,7 @@ export interface TestDbHandle {
  */
 export async function setupTestDb(): Promise<TestDbHandle> {
   const base = loadSettingsFromEnv();
-  const prefix = `t_${Date.now().toString(36)}_${runCounter++}_`;
+  const prefix = `t_${Date.now().toString(36)}_${runCounter++}_${Math.random().toString(36).slice(2, 10)}_`;
   const settings = mergeSettings(base, { connection: { tablePrefix: prefix } });
   const writePool = createWritePool(settings.connection, settings.pool);
   const readPool = createReadPool(settings.connection, settings.readConnection, settings.pool);

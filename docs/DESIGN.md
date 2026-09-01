@@ -4,7 +4,7 @@
 
 ## 1. 定位
 
-`@deepseek-ai/dsh-session-persistence-mysql` 是 `dsh-session-persistence` 能力接缝的 **MySQL Provider**。以 Cordis 插件加载后注册为 `ctx.sessionPersistence`，持久化 event-sourced 的 `SessionEvent` 日志（log 是唯一事实源），非回放元数据随 `SessionHeader` 存放。与 `dsh-session-persistence-jsonl` 行为契约等价。
+`@sandersyao/dsh-session-persistence-mysql` 是 `dsh-session-persistence` 能力接缝的 **MySQL Provider**。以 Cordis 插件加载后注册为 `ctx.sessionPersistence`，持久化 event-sourced 的 `SessionEvent` 日志（log 是唯一事实源），非回放元数据随 `SessionHeader` 存放。与 `dsh-session-persistence-jsonl` 行为契约等价。
 
 ## 2. 架构
 
@@ -47,29 +47,29 @@ DDL 见 §5（含字段中文注释）。
 ```sql
 -- sessions：每会话一行（=已 materialize 的会话头）
 CREATE TABLE IF NOT EXISTS `${prefix}sessions` (
-  session_id       VARCHAR(255) NOT NULL,   -- 品牌化会话 id；唯一标识。仅参数化绑定，绝不作 SQL 标识符拼接
-  version          INT NOT NULL,            -- 会话头格式版本（SESSION_FORMAT_VERSION，当前 v0）
-  created_at       BIGINT NOT NULL,         -- 会话创建时间（epoch 毫秒）；重建还原原始 createdAt
-  cwd              TEXT NULL,               -- 会话工作目录（可选）
-  parent_session   VARCHAR(255) NULL,       -- 父会话 id（lineage，可选）
-  seed_length      INT NULL,                -- seed 前缀事件数（fork 时 seed boundary，可选）
-  origin           VARCHAR(64) NULL,        -- 会话来源标记（可选）
-  delegation_depth INT NOT NULL,            -- 委托深度；磁盘上必需，顶层为 0
-  agent_preset     VARCHAR(255) NULL,       -- 决定恢复后工具与提示词的 agent preset（可选但建议持久化）
-  log_rev          BIGINT NOT NULL DEFAULT 0, -- 日志修订号：每次 append/repair 同事务自增；构成 revision 日志版本
+  session_id       VARCHAR(255) NOT NULL COMMENT '品牌化会话 id；唯一标识。仅参数化绑定，绝不作 SQL 标识符拼接',
+  version          INT NOT NULL COMMENT '会话头格式版本（SESSION_FORMAT_VERSION，当前 v0）',
+  created_at       BIGINT NOT NULL COMMENT '会话创建时间（epoch 毫秒）；重建还原原始 createdAt',
+  cwd              TEXT NULL COMMENT '会话工作目录（可选）',
+  parent_session   VARCHAR(255) NULL COMMENT '父会话 id（lineage，可选）',
+  seed_length      INT NULL COMMENT 'seed 前缀事件数（fork 时 seed boundary，可选）',
+  origin           VARCHAR(64) NULL COMMENT '会话来源标记（可选）',
+  delegation_depth INT NOT NULL COMMENT '委托深度；磁盘上必需，顶层为 0',
+  agent_preset     VARCHAR(255) NULL COMMENT '决定恢复后工具与提示词的 agent preset（可选但建议持久化）',
+  log_rev          BIGINT NOT NULL DEFAULT 0 COMMENT '日志修订号：每次 append/repair 同事务自增；构成 revision 日志版本',
   PRIMARY KEY (session_id)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB COMMENT='会话头表：每会话一行（=已 materialize 的会话头）';
 
 -- events：会话事件日志（append-only，事实源）
 CREATE TABLE IF NOT EXISTS `${prefix}events` (
-  session_id VARCHAR(255) NOT NULL,   -- 所属会话 id，引用 sessions；与 seq 构成复合主键
-  seq        BIGINT NOT NULL,         -- 事件在日志中的序号，从 0 连续递增；复合主键唯一约束兜底同 id 双写
-  row_type   VARCHAR(32) NULL,        -- 存储行类型：NULL=裸事件；text-chunks/reasoning-chunks/tool-call-chunks=packed chunk 行
-  payload    LONGTEXT NOT NULL,       -- 存储记录 JSON；参数化写入；非 JSON 可序列化在写入前被拒绝
+  session_id VARCHAR(255) NOT NULL COMMENT '所属会话 id，引用 sessions；与 seq 构成复合主键',
+  seq        BIGINT NOT NULL COMMENT '事件在日志中的序号，从 0 连续递增；复合主键唯一约束兜底同 id 双写',
+  row_type   VARCHAR(32) NULL COMMENT '存储行类型：NULL=裸事件；text-chunks/reasoning-chunks/tool-call-chunks=packed chunk 行',
+  payload    LONGTEXT NOT NULL COMMENT '存储记录 JSON；参数化写入；非 JSON 可序列化在写入前被拒绝',
   PRIMARY KEY (session_id, seq),
-  CONSTRAINT fk_events_session FOREIGN KEY (session_id)
+  FOREIGN KEY (session_id)
     REFERENCES `${prefix}sessions`(session_id)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB COMMENT='事件日志表：会话事件日志（append-only，事实源）';
 ```
 
 **幂等 + 版本校验**：

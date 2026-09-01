@@ -5,7 +5,7 @@
 ## 0.1.1-rc.2 (unreleased)
 
 ### 新增
-- MySQL `SessionPersistence` 后端插件（`@deepseek-ai/dsh-session-persistence-mysql`）：
+- MySQL `SessionPersistence` 后端插件（`@sandersyao/dsh-session-persistence-mysql`）：
   - 复用 `PersistenceCoordinator`，实现 `PersistenceBackend` hooks（`loadStored`/`readStoredRevision`/`loadStoredFrom`/`appendBatch`/`commitRepair`/`list`/`close`）。
   - 两表（sessions + events）+ `_meta` 版本表，幂等建表 + 版本校验/迁移，fail-closed。
   - lazy materialization（header 与首批事件同事务原子提交）。

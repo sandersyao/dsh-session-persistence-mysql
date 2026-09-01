@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-session-persistence-mysql
+# @sandersyao/dsh-session-persistence-mysql
 
 [English](README.md) | 中文
 
@@ -7,7 +7,7 @@ DeepSeek Harness 的 **MySQL 会话持久化后端**——`dsh-session-persisten
 ## 安装与使用
 
 ```ts
-import { MysqlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-mysql'
+import { MysqlSessionPersistence } from '@sandersyao/dsh-session-persistence-mysql'
 
 await ctx.plugin(MysqlSessionPersistence, {
   connection: { tablePrefix: process.env.MYSQL_TABLE_PREFIX },
