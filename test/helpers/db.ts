@@ -1,13 +1,9 @@
 import { Context } from "@deepseek-ai/cordis";
-import { PersistenceCoordinator } from "@deepseek-ai/dsh-session-persistence";
 import SessionStore from "@deepseek-ai/dsh-session";
+import { PersistenceCoordinator } from "@deepseek-ai/dsh-session-persistence";
 import type { Pool } from "mysql2/promise";
 
-import {
-  loadSettingsFromEnv,
-  mergeSettings,
-  type MysqlSettings,
-} from "../../src/config.js";
+import { loadSettingsFromEnv, type MysqlSettings, mergeSettings } from "../../src/config.js";
 import { MysqlBackend } from "../../src/mysql-backend.js";
 import { createReadPool, createWritePool } from "../../src/pool.js";
 import { ensureSchema, tableNames } from "../../src/schema.js";

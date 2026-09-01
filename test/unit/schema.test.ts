@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  SCHEMA_VERSION,
   assertTablePrefix,
   eventsDdl,
   metaDdl,
+  SCHEMA_VERSION,
   sessionsDdl,
   tableNames,
 } from "../../src/schema.js";
@@ -34,7 +34,18 @@ describe("tableNames", () => {
 describe("DDL 语句", () => {
   it("sessions DDL 包含全部字段与中文注释", () => {
     const ddl = sessionsDdl("dsh_sessions");
-    for (const field of ["session_id", "version", "created_at", "cwd", "parent_session", "seed_length", "origin", "delegation_depth", "agent_preset", "log_rev"]) {
+    for (const field of [
+      "session_id",
+      "version",
+      "created_at",
+      "cwd",
+      "parent_session",
+      "seed_length",
+      "origin",
+      "delegation_depth",
+      "agent_preset",
+      "log_rev",
+    ]) {
       expect(ddl).toContain(field);
     }
     for (const comment of ["品牌化会话 id", "日志修订号", "会话头表"]) {
