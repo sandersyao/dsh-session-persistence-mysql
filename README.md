@@ -15,6 +15,11 @@ await ctx.plugin(MysqlSessionPersistence, {
 // ctx.sessionPersistence is now MySQL-backed.
 ```
 
+## Guides
+
+- **Try it in a dsh profile without touching existing sessions** — `docs/DSH_PROFILE_TRIAL.md`.
+- **Production / npm install & `cordis.patch.yml` integration (replace the default JSONL backend)** — `docs/DEPLOYMENT.md` §8.
+
 ## Configuration
 
 Credentials, table prefix and pool tuning come from environment variables / a `.env` file (see `.env.example`). The plugin `Config` is fully optional — environment is the source of truth for credentials (never hard-code a password).

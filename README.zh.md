@@ -15,6 +15,11 @@ await ctx.plugin(MysqlSessionPersistence, {
 // ctx.sessionPersistence 现在由 MySQL 支撑。
 ```
 
+## 指南
+
+- **在 dsh profile 中试用且不影响现有会话** —— `docs/DSH_PROFILE_TRIAL.md`。
+- **生产 / npm 安装与 `cordis.patch.yml` 集成（替换默认 JSONL 后端）** —— `docs/DEPLOYMENT.md` §8。
+
 ## 配置
 
 凭据、表前缀与连接池参数来自环境变量 / `.env`（见 `.env.example`）。插件 `Config` 全部可选——**凭据只来自环境变量**（绝不硬编码密码）。
