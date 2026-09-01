@@ -11,6 +11,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.2
+      dotenv:
+        specifier: ^16.4.0
+        version: 16.6.1
       mysql2:
         specifier: ^3.24.0
         version: 3.24.2(@types/node@22.20.1)
@@ -36,9 +39,6 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^2.1.0
         version: 2.1.9(vitest@2.1.9(@types/node@22.20.1))
-      dotenv:
-        specifier: ^16.4.0
-        version: 16.6.1
       execa:
         specifier: ^9.0.0
         version: 9.6.1
