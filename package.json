@@ -5,6 +5,7 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
+  "author": "姚晓威 <sanders.yao@gmail.com>",
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",

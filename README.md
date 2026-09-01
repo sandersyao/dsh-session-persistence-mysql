@@ -1,5 +1,9 @@
 # @sandersyao/dsh-session-persistence-mysql
 
+<p align="center">
+  <img src="assets/dolphin_typewriter_cartoon.jpg" alt="A cartoon dolphin tapping away at a typewriter" width="480" />
+</p>
+
 English | [中文](README.zh.md)
 
 The **MySQL durable session-persistence backend** for the DeepSeek Harness — a concrete `SessionPersistence` (the `dsh-session-persistence` seam). Load it as a plugin; it registers `ctx.sessionPersistence` and persists the event-sourced `SessionEvent` log into MySQL, behavior-contract-equivalent to the JSONL backend, with **read/write split** support.

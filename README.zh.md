@@ -1,5 +1,9 @@
 # @sandersyao/dsh-session-persistence-mysql
 
+<p align="center">
+  <img src="assets/dolphin_typewriter_cartoon.jpg" alt="一只海豚在敲打字机的卡通图" width="480" />
+</p>
+
 [English](README.md) | 中文
 
 DeepSeek Harness 的 **MySQL 会话持久化后端**——`dsh-session-persistence` 能力接缝的一个具体 Provider。以插件加载后注册 `ctx.sessionPersistence`，把 event-sourced 的 `SessionEvent` 日志持久化到 MySQL，与 JSONL 后端行为契约等价，并支持**读写分离**。
