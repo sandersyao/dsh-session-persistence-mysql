@@ -25,5 +25,6 @@
 - **决策**：按接缝契约实现，不做扩展。
 
 ## TD-007 — 死锁重试分支与 close 分支的测试覆盖缺口
-- **状态**：open
-- **说明**：`mysql-backend.ts` 的死锁重试（`ER_LOCK_DEADLOCK`）与跨库 `close()` 分支在集成测试中未专门触发（真实死锁难稳定复现）；当前用单元/契约路径间接覆盖。后续可加定向死锁注入测试。
+- **状态**：resolved（2026-09-01）
+- **说明**：`mysql-backend.ts` 的死锁重试（`ER_LOCK_DEADLOCK`）与跨库 `close()` 分支此前缺定向测试。
+- **处理**：新增 `test/unit/mysql-backend.test.ts`（4 例）——mock 池注入瞬时/持续死锁验证重试与放弃语义；同库/异库 `close()` 验证只关一次/各关一次。

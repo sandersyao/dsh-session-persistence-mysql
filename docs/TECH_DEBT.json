@@ -47,9 +47,9 @@
     {
       "id": "TD-007",
       "title": "死锁重试与跨库 close 分支覆盖缺口",
-      "description": "mysql-backend.ts 的 ER_LOCK_DEADLOCK 重试分支与读写异库 close() 分支在集成测试中未定向触发（真实死锁难稳定复现）。",
-      "decision": "当前由单元/契约路径间接覆盖；后续可加死锁注入测试。",
-      "status": "open"
+      "description": "mysql-backend.ts 的 ER_LOCK_DEADLOCK 重试分支与读写异库 close() 分支此前未定向覆盖。",
+      "resolution": "新增 test/unit/mysql-backend.test.ts（4 例）：mock 池注入瞬时/持续死锁验证重试与放弃；同库/异库 close 验证。",
+      "status": "resolved"
     }
   ]
 }

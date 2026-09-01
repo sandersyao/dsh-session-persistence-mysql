@@ -52,3 +52,47 @@ Capacity      = Disk/day × 保留天数       # A≈1.5–2.0
 ## 7. 优雅关停
 
 插件 dispose 时协调器先排空所有 controller、等待在途写操作，再关闭写/读连接池（同库只关一次）。滚动发布前建议先停流量再缩容。
+
+## 8. 在 dsh 中集成（npm 安装 + `cordis.patch.yml`）
+
+正常使用请用 npm 包安装（开发期 `file:` 试用见 `docs/DSH_PROFILE_TRIAL.md`）。
+
+### 8.1 安装到目标 profile
+
+```bash
+dsh plugin --profile <name> add @sandersyao/dsh-session-persistence-mysql
+```
+
+### 8.2 用 MySQL 替换默认 jsonl 后端
+
+dsh 的 profile 是补丁组合；默认 jsonl 后端在 `dsh-base` bundle 里以 id `session-persistence-jsonl` 声明。在目标 profile 的 `cordis.patch.yml` 中**停用 jsonl、插入 MySQL**：
+
+```yaml
+# ~/.dsh/profiles/<name>/cordis.patch.yml
+- id: session-persistence-jsonl
+  disabled: true
+
+- insert:
+    - id: session-persistence-mysql
+      name: '@sandersyao/dsh-session-persistence-mysql'
+      config:
+        connection:
+          tablePrefix: dsh_
+```
+
+> 说明：
+> - patch 按插件 `id` 定位、后者覆盖前者；`disabled: true` 停用，`insert:` 追加新行。
+> - `name` 必须是包名；插件默认导出即插件类，loader 直接构造。
+> - `config` 可选；主机/库/凭据由环境变量 `MYSQL_*` 提供（见 §2/§3），`connection.tablePrefix` 可在此覆盖 env 的 `MYSQL_TABLE_PREFIX`。
+
+### 8.3 会话迁移注意
+
+`ctx.sessionPersistence` 每 profile 仅一个后端。切到 MySQL 后，**该 profile 内已有的 JSONL 会话（`~/.dsh/sessions/...`）不会出现在 MySQL**——若需保留旧会话，请在**新 profile** 上启用（旧 profile 不动），或先迁移数据。
+
+### 8.4 校验
+
+```bash
+dsh --dump-config --profile <name>   # 查看组合后是否已含 session-persistence-mysql、jsonl 是否 disabled
+dsh --profile <name>
+```
+
