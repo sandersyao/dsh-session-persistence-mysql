@@ -34,6 +34,8 @@ Credentials, table prefix and pool tuning come from environment variables / a `.
 | `MYSQL_SCHEMA_AUTO_MIGRATE` | `true` | Auto-migrate schema on startup; `false` only validates. |
 | `ENCRYPTION_KEY` | (empty) | Reserved for application-level field encryption (deferred; empty = plaintext). |
 
+> **Test isolation.** Automated tests (`vitest`) run against a **separate** database to avoid touching the production one: `MYSQL_TEST_DATABASE` (default `test`) overrides `MYSQL_DATABASE` during tests, and `MYSQL_ROOT_PASSWORD` is used only by the test harness to create/grant the test DB. See `docs/MANUAL_TEST_PLAN.md`.
+
 ## Storage layout
 
 Two tables plus a schema-version table, all under `MYSQL_TABLE_PREFIX`:

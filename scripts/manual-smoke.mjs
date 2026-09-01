@@ -7,6 +7,10 @@ import { createPool } from "mysql2/promise";
 
 import { MysqlSessionPersistence } from "../lib/index.js";
 
+// 隔离到测试库（缺省 test），避免污染生产库。
+process.env.MYSQL_DATABASE ??= process.env.MYSQL_TEST_DATABASE ?? "test";
+delete process.env.MYSQL_READ_HOST;
+
 /** 简单结构事件构造。 */
 function ev(type, seq, data) {
   return { type, seq, time: 1_000 + seq, data };
@@ -74,7 +78,7 @@ try {
       port: 3306,
       user: process.env.MYSQL_USER ?? "dsh",
       password: process.env.MYSQL_PASSWORD ?? "dsh_dev_password",
-      database: process.env.MYSQL_DATABASE ?? "dsh_session",
+      database: process.env.MYSQL_DATABASE ?? "test",
     });
     const names = {
       events: `${prefix}events`,

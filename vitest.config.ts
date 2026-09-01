@@ -8,6 +8,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/**/*.test.ts"],
+    setupFiles: ["test/helpers/test-env.ts"],
+    globalSetup: ["test/helpers/test-global.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],

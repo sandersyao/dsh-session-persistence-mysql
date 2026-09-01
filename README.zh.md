@@ -34,6 +34,8 @@ await ctx.plugin(MysqlSessionPersistence, {
 | `MYSQL_SCHEMA_AUTO_MIGRATE` | `true` | 启动自动迁移 schema；`false` 仅校验。 |
 | `ENCRYPTION_KEY` | （空） | 预留应用层字段加密 key（暂缓；空 = 明文）。 |
 
+> **测试隔离**：自动化测试（`vitest`）运行在**独立测试库**上，避免触碰生产库——`MYSQL_TEST_DATABASE`（默认 `test`）在测试期间覆盖 `MYSQL_DATABASE`；`MYSQL_ROOT_PASSWORD` 仅由测试引导建库/授权使用。见 `docs/MANUAL_TEST_PLAN.md`。
+
 ## 存储布局
 
 三张表，均带 `MYSQL_TABLE_PREFIX` 前缀：

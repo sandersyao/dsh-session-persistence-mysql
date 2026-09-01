@@ -6,8 +6,9 @@
 
 1. 启动 MySQL：`docker compose up -d`，等待 `healthy`（本机镜像 `mysql:8.4`）。
 2. 确认 `.env` 已配置 `MYSQL_*`（模板见 `.env.example`；凭据只来自这里）。
-3. 安装并构建：`pnpm install && pnpm build`。
-4. 冒烟脚本：`node scripts/manual-smoke.mjs`，期望 `7/7 通过`。
+3. 测试库隔离：自动化测试用 `MYSQL_TEST_DATABASE`（默认 `test`），**不触碰** `MYSQL_DATABASE`（生产库）。手动验证时建议同样用独立库。
+4. 安装并构建：`pnpm install && pnpm build`。
+5. 冒烟脚本：`node scripts/manual-smoke.mjs`，期望 `7/7 通过`。
 
 ## 1. 冒烟（基础链路）
 

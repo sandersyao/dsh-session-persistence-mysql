@@ -70,13 +70,13 @@ describe("e2e：插件加载与全流程", () => {
     expect(persistence.supportsRawArtifacts).toBe(false);
     await expect(persistence.readRaw(id, new AbortController().signal)).rejects.toThrow();
 
-    // 记录连接池以便清理。
+    // 记录连接池以便清理（连接测试库，与插件一致）。
     pool = createPool({
-      host: "127.0.0.1",
-      port: 3306,
-      user: "dsh",
-      password: "dsh_dev_password",
-      database: "dsh_session",
+      host: process.env.MYSQL_HOST ?? "127.0.0.1",
+      port: Number(process.env.MYSQL_PORT ?? 3306),
+      user: process.env.MYSQL_USER ?? "dsh",
+      password: process.env.MYSQL_PASSWORD ?? "dsh_dev_password",
+      database: process.env.MYSQL_DATABASE ?? "test",
     });
   });
 });
