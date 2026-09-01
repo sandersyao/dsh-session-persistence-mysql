@@ -1,0 +1,14 @@
+{
+  "id": "T5",
+  "title": "测试体系（安全/契约一致性/e2e/bench/覆盖率）",
+  "status": "completed",
+  "dependsOn": ["T4"],
+  "owner": "repo-agent",
+  "acceptedCriteria": [
+    "单元 20 + 契约 9 + 安全 6 + 集成 2 + e2e 1 + 基准 2 全绿",
+    "覆盖率门禁达标（lines≥90）",
+    "test/helpers 基建就位"
+  ],
+  "techDebt": ["死锁注入/跨库 close 定向测试缺失（TD-007）"],
+  "handoffTo": "T6"
+}

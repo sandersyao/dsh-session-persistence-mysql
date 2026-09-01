@@ -2,12 +2,12 @@
   "project": "dsh-session-persistence-mysql",
   "goal": "按已批准计划实现 MySQL 会话持久化后端，达成全部成功标准（契约一致性/安全/功能/性能/覆盖率≥90%）。",
   "milestones": [
-    { "id": "T1", "title": "基础设施", "status": "in_progress", "dependsOn": [] },
-    { "id": "T2", "title": "数据模型与 DDL", "status": "pending", "dependsOn": ["T1"] },
-    { "id": "T3", "title": "PersistenceBackend hooks + 协调器 + 读写分离", "status": "pending", "dependsOn": ["T2"] },
-    { "id": "T4", "title": "配置/连接池/安全", "status": "pending", "dependsOn": ["T3"] },
-    { "id": "T5", "title": "测试体系（安全/契约一致性/e2e/bench/覆盖率）", "status": "pending", "dependsOn": ["T4"] },
-    { "id": "T6", "title": "文档收尾与发布前对齐", "status": "pending", "dependsOn": ["T5"] }
+    { "id": "T1", "title": "基础设施", "status": "completed", "dependsOn": [] },
+    { "id": "T2", "title": "数据模型与 DDL", "status": "completed", "dependsOn": ["T1"] },
+    { "id": "T3", "title": "PersistenceBackend hooks + 协调器 + 读写分离", "status": "completed", "dependsOn": ["T2"] },
+    { "id": "T4", "title": "配置/连接池/安全", "status": "completed", "dependsOn": ["T3"] },
+    { "id": "T5", "title": "测试体系（安全/契约一致性/e2e/bench/覆盖率）", "status": "completed", "dependsOn": ["T4"] },
+    { "id": "T6", "title": "文档收尾与发布前对齐", "status": "in_progress", "dependsOn": ["T5"] }
   ],
   "techDebtFile": "docs/TECH_DEBT.json",
   "designFile": "docs/DESIGN.md"

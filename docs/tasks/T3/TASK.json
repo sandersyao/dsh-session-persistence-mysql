@@ -1,0 +1,15 @@
+{
+  "id": "T3",
+  "title": "PersistenceBackend hooks + 协调器 + 读写分离",
+  "status": "completed",
+  "dependsOn": ["T2"],
+  "owner": "repo-agent",
+  "acceptedCriteria": [
+    "实现全部 hooks（loadStored/readStoredRevision/loadStoredFrom/appendBatch/commitRepair/list/listSnapshots/close）",
+    "复用 PersistenceCoordinator，[Service.init] 中 ensureSchema + 建 coordinator",
+    "读写分离（读池/写池，同库复用）",
+    "契约一致性测试 9 例通过"
+  ],
+  "techDebt": [],
+  "handoffTo": "T4"
+}

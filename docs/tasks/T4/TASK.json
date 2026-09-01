@@ -1,0 +1,15 @@
+{
+  "id": "T4",
+  "title": "配置/连接池/安全",
+  "status": "completed",
+  "dependsOn": ["T3"],
+  "owner": "repo-agent",
+  "acceptedCriteria": [
+    "凭据仅来自 env/.env，配置不回显，日志脱敏",
+    "全参数化防注入、表前缀校验、最小权限文档",
+    "明文默认 + encryptionKey 预留；TLS 暂缓",
+    "安全测试 6 例通过"
+  ],
+  "techDebt": ["死锁重试分支未定向覆盖（TD-007）"],
+  "handoffTo": "T5"
+}

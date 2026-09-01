@@ -43,6 +43,13 @@
       "description": "接缝 list() 返回全部 materialized 会话，大库未分页。",
       "decision": "按接缝契约实现，不做扩展；标 deferred。",
       "status": "deferred"
+    },
+    {
+      "id": "TD-007",
+      "title": "死锁重试与跨库 close 分支覆盖缺口",
+      "description": "mysql-backend.ts 的 ER_LOCK_DEADLOCK 重试分支与读写异库 close() 分支在集成测试中未定向触发（真实死锁难稳定复现）。",
+      "decision": "当前由单元/契约路径间接覆盖；后续可加死锁注入测试。",
+      "status": "open"
     }
   ]
 }

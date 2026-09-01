@@ -1,0 +1,15 @@
+{
+  "id": "T2",
+  "title": "数据模型与 DDL",
+  "status": "completed",
+  "dependsOn": ["T1"],
+  "owner": "repo-agent",
+  "acceptedCriteria": [
+    "两表 + _meta 版本表，幂等建表 + 版本校验/迁移",
+    "表前缀字符集校验，字段中文注释",
+    "header 与首批事件同事务（lazy materialization 原子）",
+    "单测 7 例通过"
+  ],
+  "techDebt": ["eventsDdl 外键自动命名（无显式约束名）"],
+  "handoffTo": "T3"
+}
