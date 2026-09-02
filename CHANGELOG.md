@@ -2,7 +2,7 @@
 
 本项目为 Pre-1.0，格式版本 `SESSION_FORMAT_VERSION`(v0)，遵循 [语义化版本](https://semver.org/)。版本对齐当前运行的 dsh `^0.1.1-rc.2`。
 
-## 0.1.1-rc.2 (unreleased)
+## 0.1.1 (2026-09-01)
 
 ### 新增
 - MySQL `SessionPersistence` 后端插件（`@sandersyao/dsh-session-persistence-mysql`）：
