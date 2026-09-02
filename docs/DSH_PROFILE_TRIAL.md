@@ -27,18 +27,19 @@ dsh plugin --profile web-mysql add "file:/<仓库绝对路径>"
 > 插件运行时依赖（`dotenv`/`mysql2`/`schemastery`）会随 `dependencies` 装进 profile。
 > 若改了仓库的 `dependencies`/`lib/`，需在 profile 重装：`cd ~/.dsh/profiles/web-mysql && pnpm install --force`。
 
-**3. 写 `~/.dsh/profiles/web-mysql/cordis.patch.yml`**——替换默认 jsonl 后端：
-```yaml
-# 用 MySQL 后端替换默认 jsonl 后端（仅本 profile 生效）
-- id: session-persistence-jsonl
-  disabled: true
+**3. 确认/覆盖后端选择**
 
-- insert:
-    - id: session-persistence-mysql
-      name: '@sandersyao/dsh-session-persistence-mysql'
-      config:
-        connection:
-          tablePrefix: trial_
+本包是 dsh 组合包（`package.json` 声明 `dsh.bundle`），`file:` 安装后其 `cordis.patch.yml` 会自动应用——**停用 jsonl、插入 MySQL 后端**（默认前缀 `dsh_`）。
+
+试用库如需不同前缀（如 `trial_`），在 profile 的 `cordis.patch.yml` 中**覆盖该行**（patch 按 `id` 替换整行 config，不深度合并）：
+
+```yaml
+# ~/.dsh/profiles/web-mysql/cordis.patch.yml
+- id: session-persistence-mysql
+  name: '@sandersyao/dsh-session-persistence-mysql'
+  config:
+    connection:
+      tablePrefix: trial_
 ```
 
 **4. 注入 `MYSQL_*` 环境变量**（写到 `~/.dsh/.env`，或 shell export）：

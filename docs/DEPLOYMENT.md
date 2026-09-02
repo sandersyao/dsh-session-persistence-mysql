@@ -53,9 +53,9 @@ Capacity      = Disk/day × 保留天数       # A≈1.5–2.0
 
 插件 dispose 时协调器先排空所有 controller、等待在途写操作，再关闭写/读连接池（同库只关一次）。滚动发布前建议先停流量再缩容。
 
-## 8. 在 dsh 中集成（npm 安装 + `cordis.patch.yml`）
+## 8. 在 dsh 中集成（npm 安装 + bundle）
 
-正常使用请用 npm 包安装（开发期 `file:` 试用见 `docs/DSH_PROFILE_TRIAL.md`）。
+本包是一个 **dsh 组合包（bundle）**：`package.json` 声明 `dsh.bundle`，随包自带 `cordis.patch.yml`。`dsh plugin add` 装进 profile 后，该 patch 层自动应用——**停用默认 jsonl 后端、插入 MySQL 后端**，无需用户手写 patch。
 
 ### 8.1 安装到目标 profile
 
@@ -63,12 +63,9 @@ Capacity      = Disk/day × 保留天数       # A≈1.5–2.0
 dsh plugin --profile <name> add @sandersyao/dsh-session-persistence-mysql
 ```
 
-### 8.2 用 MySQL 替换默认 jsonl 后端
-
-dsh 的 profile 是补丁组合；默认 jsonl 后端在 `dsh-base` bundle 里以 id `session-persistence-jsonl` 声明。在目标 profile 的 `cordis.patch.yml` 中**停用 jsonl、插入 MySQL**：
+bundle 自带的 patch 层等价于：
 
 ```yaml
-# ~/.dsh/profiles/<name>/cordis.patch.yml
 - id: session-persistence-jsonl
   disabled: true
 
@@ -81,9 +78,22 @@ dsh 的 profile 是补丁组合；默认 jsonl 后端在 `dsh-base` bundle 里�
 ```
 
 > 说明：
-> - patch 按插件 `id` 定位、后者覆盖前者；`disabled: true` 停用，`insert:` 追加新行。
-> - `name` 必须是包名；插件默认导出即插件类，loader 直接构造。
-> - `config` 可选；主机/库/凭据由环境变量 `MYSQL_*` 提供（见 §2/§3），`connection.tablePrefix` 可在此覆盖 env 的 `MYSQL_TABLE_PREFIX`。
+> - patch 按插件 `id` 定位、后应用者覆盖先应用者；`disabled: true` 停用 jsonl，`insert:` 追加新行。
+> - `name` 是包名；插件默认导出即插件类，loader 直接构造。
+> - `config` 可选；主机/库/凭据由环境变量 `MYSQL_*` 提供（见 §2/§3）。如需覆盖 bundle 的默认 `tablePrefix`，可在 profile 自己的 `cordis.patch.yml` 中按 `id` 覆盖该行整段 config。
+
+### 8.2 手动覆盖（可选）
+
+bundle 已自动停用 jsonl 并插入 MySQL。仅当你想**覆盖默认配置**（例如改用不同表前缀）时，才需要在 profile 的 `cordis.patch.yml` 里重写该行（patch 替换整行 config，不深度合并）：
+
+```yaml
+# ~/.dsh/profiles/<name>/cordis.patch.yml
+- id: session-persistence-mysql
+  name: '@sandersyao/dsh-session-persistence-mysql'
+  config:
+    connection:
+      tablePrefix: my_prefix_
+```
 
 ### 8.3 会话迁移注意
 
@@ -95,4 +105,39 @@ dsh 的 profile 是补丁组合；默认 jsonl 后端在 `dsh-base` bundle 里�
 dsh --dump-config --profile <name>   # 查看组合后是否已含 session-persistence-mysql、jsonl 是否 disabled
 dsh --profile <name>
 ```
+
+## 9. 发布到 npmjs（GitHub Actions 自动发布）
+
+仓库已配置 `.github/workflows/publish.yml`：**打 tag 时自动构建并发布到 npmjs.com**。
+
+### 9.1 一次性配置（GitHub 仓库）
+
+1. 在 npmjs.com 生成一个 **publish 权限的 access token**：npmjs → Access Tokens → Generate New Token → 选 *Publish*（或 *Granular Access* 仅对本包）。
+2. 到 GitHub 仓库 **Settings → Secrets and variables → Actions**，新建名为 `NPM_TOKEN` 的 repository secret，值粘贴该 token。
+
+### 9.2 发布流程
+
+```bash
+git tag v0.1.1   # 版本号与 package.json 保持一致
+git push origin v0.1.1
+```
+
+push tag 后，GitHub Actions 的 `Publish to npmjs` 工作流自动运行：install → typecheck → build → `pnpm publish`（`--no-git-checks` 允许在非 git HEAD 版本 tag 下发布）。可到仓库 **Actions** 页查看状态。
+
+### 9.3 触发规则
+
+- 匹配 `v*` 的 tag 触发，例如 `v0.1.1`、`v0.1.1-rc.2`。
+- `v*-dev*`（如 `v0.1.1-dev.1`）**不会**触发发布，用于预发布分支不误发。
+- `prepublishOnly` 钩子保证即使手动 `pnpm publish` 也会先 `pnpm build`，`lib/` 不会缺失。
+
+### 9.4 手动发布（不用 Actions）
+
+如需本地直接发（例如不 push tag），先构建再发布：
+
+```bash
+pnpm build
+pnpm publish --access public
+```
+
+> 注意：`files` 已含 `lib/` 与 `cordis.patch.yml`（bundle 层），`pnpm pack` 已验证打包内容完整。
 
