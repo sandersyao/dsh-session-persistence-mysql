@@ -5,6 +5,7 @@ on:
     tags:
       - "v*"
       - "!v*-dev*"
+  workflow_dispatch:
 
 jobs:
   publish:
