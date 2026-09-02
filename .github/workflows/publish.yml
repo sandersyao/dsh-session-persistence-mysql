@@ -1,0 +1,41 @@
+name: Publish to npmjs
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "!v*-dev*"
+
+jobs:
+  publish:
+    name: Publish @sandersyao/dsh-session-persistence-mysql
+    runs-on: ubuntu-latest
+    permissions:
+      # 发布 npmjs 不需要写仓库，但显式声明可读内容、避免冗余权限
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Publish to npmjs
+        run: pnpm publish --no-git-checks --access public
+        env:
+          # 对应仓库 Secret `NPM_TOKEN`（npmjs.com 的 publish access token）
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
