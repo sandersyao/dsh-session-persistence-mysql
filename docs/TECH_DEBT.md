@@ -16,9 +16,10 @@
 - **状态**：deferred
 - **决策**：`MYSQL_SSL_REQUIRED` 保留配置位；安全测试暂缓 TLS 强制项。
 
-## TD-005 — v0.1.2-alpha.3 兼容
-- **状态**：deferred
-- **决策**：本轮 peer 对齐 `^0.1.1-rc.2`，靠高覆盖率（lines≥90）打底，后续再兼容。
+## TD-005 — dsh v0.1.2-rc.1 兼容对齐
+- **状态**：resolved（2026-09-04，T6 迁移）
+- **说明**：dsh 家族锁步发布 `0.1.2-rc.1`（latest）：持久化契约存写首参 `SessionHeader` → `SessionStorageMetadata{meta,inheritedEventCount}`；`SessionHeader` 移除 `seedLength`、新增必填 `isSeeded`；新增抽象 `borrowSession`、`ensureMaterialized` 与后端可选 hook `materializeHeader`；`readFrom` 返回 `SessionEventSuffix`。
+- **处理**：peer/dev 升 `^0.1.2-rc.1`（cordis `^4.0.2`）；后端 hooks 适配存储元数据并实现 `materializeHeader`；`seed_length` 列保留为继承前缀编码（`isSeeded` 由列非空推导，镜像 JSONL，零 DDL 迁移、向后兼容存量）；子类实现 `borrowSession`/`ensureMaterialized`、`create`/`readFrom` 按新签名转传。typecheck(0 错误)/biome/build/test(47 绿)/覆盖率(lines 95.3) 全绿。
 
 ## TD-006 — list() 不分页不过滤
 - **状态**：deferred

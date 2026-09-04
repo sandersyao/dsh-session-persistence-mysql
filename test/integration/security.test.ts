@@ -20,6 +20,7 @@ describe("安全：SQL 注入与边界（优先）", () => {
       version: 0,
       id: maliciousId,
       createdAt: 1,
+      isSeeded: false,
     });
     await coordinator.append(maliciousId, balancedTurnEvents(0));
 
@@ -49,7 +50,7 @@ describe("安全：SQL 注入与边界（优先）", () => {
       events[2],
       events[3],
     ];
-    await coordinator.create({ version: 0, id, createdAt: 1 });
+    await coordinator.create({ version: 0, id, createdAt: 1, isSeeded: false });
     await coordinator.append(id, tampered as never);
 
     const loaded = await coordinator.load(id);

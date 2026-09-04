@@ -32,10 +32,10 @@
     },
     {
       "id": "TD-005",
-      "title": "v0.1.2-alpha.3 兼容",
-      "description": "官方已发布 v0.1.2-alpha.3，本项目 peer 对齐 ^0.1.1-rc.2。",
-      "decision": "本轮不做，靠高覆盖率（lines≥90）打底；后续再兼容。",
-      "status": "deferred"
+      "title": "dsh v0.1.2-rc.1 兼容对齐",
+      "description": "dsh 家族锁步发布 0.1.2-rc.1（latest）：持久化契约首参改 SessionStorageMetadata、SessionHeader 新增必填 isSeeded、新增抽象 borrowSession / ensureMaterialized / materializeHeader。",
+      "decision": "本任务（T6）已迁移：peer/dev 升 ^0.1.2-rc.1（cordis ^4.0.2）；后端 hooks 适配存储元数据；seed_length 列保留为继承前缀编码（isSeeded 由列非空推导，零 DDL 迁移）；子类实现 borrowSession/ensureMaterialized、create/readFrom 转传。typecheck/build/lint/test/覆盖率门禁全绿。",
+      "status": "resolved"
     },
     {
       "id": "TD-006",

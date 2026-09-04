@@ -1,7 +1,13 @@
-import type { SessionEvent, SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
+import {
+  type SessionEvent,
+  type SessionHeader,
+  type SessionId,
+  SessionLogOffset,
+} from "@deepseek-ai/dsh-session";
 import {
   type PersistenceBackend,
   SessionPersistenceRevision,
+  type SessionStorageMetadata,
   type StoredPrefix,
   type StoredSuffix,
 } from "@deepseek-ai/dsh-session-persistence";
@@ -82,18 +88,21 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
   }
 
   /**
-   * 从会话头行还原 SessionHeader。
+   * 从会话头行还原 SessionHeader。旧模型把 fork 边界存于 header.seedLength；
+   * 0.1.2 起 header 以必填 isSeeded 表达，继承前缀长度改由 inheritedEventCount
+   * 单独承载。落盘仍用 seed_length 列编码该前缀（仅 isSeeded 时非空），与 JSONL
+   * 参考实现逐位一致，故此处由「列非空」推导 isSeeded。
    * @param row - sessions 表行。
-   * @returns 还原的会话头。
+   * @returns 还原的会话头（含 isSeeded，不含已移除的 seedLength）。
    */
   private headerFromRow(row: SessionRow): SessionHeader {
     return {
       version: row.version,
       id: row.session_id as SessionId,
       createdAt: row.created_at,
+      isSeeded: row.seed_length !== null,
       ...(row.cwd !== null ? { cwd: row.cwd } : {}),
       ...(row.parent_session !== null ? { parentSession: row.parent_session as SessionId } : {}),
-      ...(row.seed_length !== null ? { seedLength: row.seed_length } : {}),
       ...(row.origin !== null ? { origin: row.origin as "subagent" } : {}),
       ...(row.delegation_depth !== 0 ? { delegationDepth: row.delegation_depth } : {}),
       ...(row.agent_preset !== null ? { agentPreset: row.agent_preset } : {}),
@@ -101,21 +110,40 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
   }
 
   /**
-   * 从会话头派生 sessions 表插入值（不含 log_rev，缺省为 0）。
-   * @param header - 会话头。
+   * 从会话头行还原存储元数据（header + 继承前缀长度）。loadStored/loadStoredFrom
+   * 需返回 StoredPrefix/StoredSuffix 所要求的 inheritedEventCount。
+   * @param row - sessions 表行。
+   * @returns 存储元数据。
+   */
+  private storageFromRow(row: SessionRow): SessionStorageMetadata {
+    return {
+      meta: this.headerFromRow(row),
+      inheritedEventCount: SessionLogOffset(row.seed_length ?? 0),
+    };
+  }
+
+  /**
+   * 由会话头 + 继承前缀长度派生 sessions 表插入值（不含 log_rev，缺省为 0）。
+   * seed_length 列承载 isSeeded 会话的继承前缀长度；未 seed 会话写 NULL
+   * （与 JSONL header 仅在 isSeeded 时携带 seedLength 的编码一致）。
+   * @param meta - 会话头。
+   * @param inheritedEventCount - fork 继承前缀长度。
    * @returns 与列序一致的插入数组。
    */
-  private headerInsert(header: SessionHeader): (string | number | null)[] {
+  private headerInsert(
+    meta: SessionHeader,
+    inheritedEventCount: SessionLogOffset,
+  ): (string | number | null)[] {
     return [
-      header.id,
-      header.version,
-      header.createdAt,
-      header.cwd ?? null,
-      header.parentSession ?? null,
-      header.seedLength ?? null,
-      header.origin ?? null,
-      header.delegationDepth ?? 0,
-      header.agentPreset ?? null,
+      meta.id,
+      meta.version,
+      meta.createdAt,
+      meta.cwd ?? null,
+      meta.parentSession ?? null,
+      meta.isSeeded ? inheritedEventCount : null,
+      meta.origin ?? null,
+      meta.delegationDepth ?? 0,
+      meta.agentPreset ?? null,
     ];
   }
 
@@ -166,7 +194,7 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
     const eventRows = await this.readEventRows(id, this.readPool);
     signal?.throwIfAborted();
     return {
-      meta: this.headerFromRow(header),
+      ...this.storageFromRow(header),
       events: decodeStoredRows(eventRows),
       revision: this.revision(header.log_rev),
     };
@@ -200,7 +228,7 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
    */
   async loadStoredFrom(
     id: SessionId,
-    fromSeq: number,
+    fromSeq: SessionLogOffset,
     signal?: AbortSignal,
   ): Promise<StoredSuffix | undefined> {
     signal?.throwIfAborted();
@@ -209,7 +237,7 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
     signal?.throwIfAborted();
     const eventRows = await this.readEventRows(id, this.readPool, fromSeq);
     signal?.throwIfAborted();
-    return { meta: this.headerFromRow(header), events: decodeStoredRows(eventRows) };
+    return { ...this.storageFromRow(header), events: decodeStoredRows(eventRows) };
   }
 
   /**
@@ -228,12 +256,12 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
 
   /**
    * 持久化一段连续事件批次，lazy materialization 与首批事件同一事务原子提交。
-   * @param meta - 会话头。
+   * @param storage - 存储元数据（会话头 + 继承前缀长度）。
    * @param events - 连续事件批次（seq 有序）。
    * @param isMaterialized - 会话是否已 materialize。
    */
   async appendBatch(
-    meta: SessionHeader,
+    storage: SessionStorageMetadata,
     events: readonly SessionEvent[],
     isMaterialized: boolean,
   ): Promise<void> {
@@ -241,7 +269,7 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
     let attempt = 0;
     for (;;) {
       try {
-        await this.appendBatchOnce(meta, events, isMaterialized);
+        await this.appendBatchOnce(storage, events, isMaterialized);
         return;
       } catch (error) {
         if (this.isDeadlock(error) && attempt < 3) {
@@ -256,15 +284,16 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
 
   /**
    * appendBatch 的单次事务执行体。
-   * @param meta - 会话头。
+   * @param storage - 存储元数据（会话头 + 继承前缀长度）。
    * @param events - 事件批次。
    * @param isMaterialized - 是否已 materialize。
    */
   private async appendBatchOnce(
-    meta: SessionHeader,
+    storage: SessionStorageMetadata,
     events: readonly SessionEvent[],
     isMaterialized: boolean,
   ): Promise<void> {
+    const meta = storage.meta;
     const rows = encodeStorageRows(events, this.packChunks);
     const conn = await this.writePool.getConnection();
     try {
@@ -275,7 +304,7 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
            (session_id, version, created_at, cwd, parent_session, seed_length,
             origin, delegation_depth, agent_preset)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          this.headerInsert(meta),
+          this.headerInsert(meta, storage.inheritedEventCount),
         );
       } else {
         // 锁定会话行，序列化同 id 跨进程写入。
@@ -319,18 +348,43 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
   }
 
   /**
+   * 空会话持久化 header（ensureMaterialized 的落点）：不造任何会话事件，仅
+   * 物化一行 sessions。协调器按 id 串行化，不会与 append 的 lazy materialize 竞争。
+   * @param storage - 存储元数据。
+   */
+  async materializeHeader(storage: SessionStorageMetadata): Promise<void> {
+    const conn = await this.writePool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
+        `INSERT INTO \`${this.names.sessions}\`
+         (session_id, version, created_at, cwd, parent_session, seed_length,
+          origin, delegation_depth, agent_preset)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        this.headerInsert(storage.meta, storage.inheritedEventCount),
+      );
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
    * 持久化崩溃修复：追加 closers。tornMarker 恒为 undefined（事务原子无撕裂尾）。
-   * @param meta - 会话头。
+   * @param storage - 存储元数据。
    * @param _tornMarker - 恒为 undefined。
    * @param closers - 合成关闭事件。
    */
   async commitRepair(
-    meta: SessionHeader,
+    storage: SessionStorageMetadata,
     _tornMarker: undefined,
     closers: readonly SessionEvent[],
   ): Promise<void> {
     if (closers.length === 0) return;
-    await this.appendBatch(meta, closers, true);
+    await this.appendBatch(storage, closers, true);
   }
 
   /**

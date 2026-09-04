@@ -17,6 +17,7 @@ function header(id: string): SessionHeader {
     version: 0,
     id,
     createdAt: 1_700_000_000_000,
+    isSeeded: false,
     cwd: "/tmp/proj",
     delegationDepth: 0,
     agentPreset: "test",

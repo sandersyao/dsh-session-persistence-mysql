@@ -43,6 +43,7 @@ describe("e2e：插件加载与全流程", () => {
       version: 0,
       id,
       createdAt: 1_700_000_000_000,
+      isSeeded: false,
       cwd: "/tmp/e2e",
       delegationDepth: 0,
     });
@@ -64,6 +65,11 @@ describe("e2e：插件加载与全流程", () => {
     // readFrom seek。
     const suffix = await persistence.readFrom(id, 4);
     expect(suffix.events.map((e) => e.seq)).toEqual([4, 5, 6, 7]);
+
+    // borrowSession 借用一个精确视图并释放（0.1.2 新 hook 委托）。
+    const borrowed = await persistence.borrowSession(id);
+    expect(borrowed.inspection.meta.id).toBe(id);
+    borrowed[Symbol.dispose]();
 
     // locate 无工件、readRaw 拒绝。
     expect(persistence.locate(loaded.meta)).toBeUndefined();

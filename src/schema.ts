@@ -59,7 +59,7 @@ export function sessionsDdl(name: string): string {
   created_at       BIGINT NOT NULL COMMENT '会话创建时间（epoch 毫秒）；重建时还原原始 createdAt',
   cwd              TEXT NULL COMMENT '会话工作目录（可选），用于导航/隔离',
   parent_session   VARCHAR(255) NULL COMMENT '父会话 id（lineage，可选）',
-  seed_length      INT NULL COMMENT 'seed 前缀事件数（fork 时 seed boundary，可选）',
+  seed_length      INT NULL COMMENT 'fork 继承前缀长度（=inheritedEventCount）；非空即 isSeeded，未 seed 会话为 NULL',
   origin           VARCHAR(64) NULL COMMENT '会话来源标记（可选）',
   delegation_depth INT NOT NULL COMMENT '委托深度；磁盘上必需，顶层为 0',
   agent_preset     VARCHAR(255) NULL COMMENT '决定恢复后工具与提示词的 agent preset（可选但建议持久化）',

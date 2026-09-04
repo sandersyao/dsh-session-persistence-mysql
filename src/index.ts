@@ -1,12 +1,16 @@
 import { type Context, Service } from "@deepseek-ai/cordis";
 import type {
+  Session,
   SessionEvent,
   SessionHeader,
   SessionId,
+  SessionLogOffset,
   SessionPreparation,
 } from "@deepseek-ai/dsh-session";
 import {
+  type BorrowedSessionSource,
   PersistenceCoordinator,
+  type SessionEventSuffix,
   type SessionInspection,
   type SessionLocation,
   SessionPersistence,
@@ -124,9 +128,18 @@ export class MysqlSessionPersistence extends SessionPersistence {
   /**
    * 注册新会话元数据（lazy，首次 append 时 materialize）。
    * @param meta - 会话头。
+   * @param inheritedEventCount - 继承父会话的前缀长度（仅 seeded 会话传）。
    */
-  override create(meta: SessionHeader): Promise<void> {
-    return this.coordinator.create(meta);
+  override create(meta: SessionHeader, inheritedEventCount?: SessionLogOffset): Promise<void> {
+    return this.coordinator.create(meta, inheritedEventCount);
+  }
+
+  /**
+   * 空会话也持久化 header（即便无任何会话事件也构成可恢复资源）。
+   * @param session - 已登记到写路径的会话实例。
+   */
+  override ensureMaterialized(session: Session): Promise<void> {
+    return this.coordinator.ensureMaterialized(session);
   }
 
   /**
@@ -165,16 +178,26 @@ export class MysqlSessionPersistence extends SessionPersistence {
   }
 
   /**
+   * 借用一个精确的会话视图，同时钉住其可复用的 prepared 会话源，便于后续
+   * prepare 复用。返回的可 Disposable 观测在释放前保持未发布会话不被回收。
+   * @param id - 待观察的已持久化会话。
+   * @param signal - 取消信号。
+   */
+  override borrowSession(id: SessionId, signal?: AbortSignal): Promise<BorrowedSessionSource> {
+    return this.coordinator.borrowSession(id, signal);
+  }
+
+  /**
    * 从 fromSeq 起读存储事件（detached 后缀读）。
    * @param id - 会话 id。
-   * @param fromSeq - 起始 seq（含）。
+   * @param fromSeq - 起始日志偏移（含）。
    * @param signal - 取消信号。
    */
   override readFrom(
     id: SessionId,
-    fromSeq: number,
+    fromSeq: SessionLogOffset,
     signal?: AbortSignal,
-  ): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
+  ): Promise<SessionEventSuffix> {
     return this.coordinator.readFrom(id, fromSeq, signal);
   }
 

@@ -19,7 +19,7 @@ describe("性能：写入吞吐与并发安全（宽松回归门禁）", () => {
     handle = await setupTestDb();
     const { coordinator } = handle;
     for (let s = 0; s < SESSIONS; s++) {
-      await coordinator.create({ version: 0, id: `perf-${s}`, createdAt: 1 });
+      await coordinator.create({ version: 0, id: `perf-${s}`, createdAt: 1, isSeeded: false });
     }
     const start = performance.now();
     for (let b = 0; b < BATCHES; b++) {
@@ -39,7 +39,7 @@ describe("性能：写入吞吐与并发安全（宽松回归门禁）", () => {
     handle = await setupTestDb();
     const { coordinator, backend } = handle;
     for (let s = 0; s < SESSIONS; s++) {
-      await coordinator.create({ version: 0, id: `conc-${s}`, createdAt: 1 });
+      await coordinator.create({ version: 0, id: `conc-${s}`, createdAt: 1, isSeeded: false });
     }
     // 并发向不同会话写。
     await Promise.all(

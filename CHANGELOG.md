@@ -1,6 +1,16 @@
 # Changelog
 
-本项目为 Pre-1.0，格式版本 `SESSION_FORMAT_VERSION`(v0)，遵循 [语义化版本](https://semver.org/)。版本对齐当前运行的 dsh `^0.1.1-rc.2`。
+本项目为 Pre-1.0，格式版本 `SESSION_FORMAT_VERSION`(v0)，遵循 [语义化版本](https://semver.org/)。版本对齐当前运行的 dsh `^0.1.2-rc.1`。
+
+## 0.1.2-rc.1 (2026-09-04) —— 迁移至 dsh v0.1.2-rc.1 契约
+
+### 兼容对齐（T6）
+- peer/dev 升至 `@deepseek-ai/dsh-session`/`dsh-session-persistence`/`dsh-invariants` `^0.1.2-rc.1`、`@deepseek-ai/cordis` `^4.0.2`；新增 `dsh-brand`/`dsh-timeout`/`dsh-scope` dev 依赖以对齐 persistence 0.1.2 peer。
+- 后端 hooks 适配 `SessionStorageMetadata{meta,inheritedEventCount}`：`appendBatch`/`commitRepair` 改收存储元数据；新增 `materializeHeader`（空会话 header 持久化）。
+- `SessionHeader` 移除 `seedLength`、新增必填 `isSeeded`：`seed_length` 列保留为继承前缀编码（`isSeeded` 由列非空推导，镜像 JSONL 参考实现，零 DDL 迁移、存量向后兼容）。
+- 子类实现 0.1.2 新增抽象 `borrowSession` 与 `ensureMaterialized`；`create` 增加 `inheritedEventCount?`、`readFrom` 返回 `SessionEventSuffix` 并按 `SessionLogOffset` 寻址。
+- 事件编码不变（format v0）；新增 seed 往返 / `materializeHeader` / e2e `borrowSession` 用例。
+- 门禁全绿：typecheck 0 错误、biome、build、test 47 例、覆盖率 lines 95.3% / funcs 89.6%。
 
 ## 0.1.1 (2026-09-01)
 

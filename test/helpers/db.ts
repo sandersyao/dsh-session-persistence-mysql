@@ -53,7 +53,8 @@ export async function setupTestDb(): Promise<TestDbHandle> {
   });
 
   const dispose = async () => {
-    await coordinator.dispose?.();
+    // dsh-session-persistence 0.1.2 的 PersistenceCoordinator 不再暴露公开 dispose，
+    // 其后端析构以 ctx effect 挂载；测试在此显式关池清理即可（coordinator 无待排空写入）。
     const names = tableNames(prefix);
     await writePool.query(
       `DROP TABLE IF EXISTS \`${names.events}\`, \`${names.sessions}\`, \`${names.meta}\``,

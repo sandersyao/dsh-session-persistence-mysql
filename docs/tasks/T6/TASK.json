@@ -1,0 +1,20 @@
+{
+  "id": "T6",
+  "title": "迁移：dsh v0.1.2-rc.1 兼容对齐（发布前）",
+  "status": "completed",
+  "dependsOn": ["T5"],
+  "owner": "repo-agent",
+  "phase": "implemented",
+  "result": "peer/dev ^0.1.2-rc.1；后端 hooks 适配 SessionStorageMetadata + materializeHeader；SessionHeader isSeeded/inheritedEventCount 经 seed_length 列编码（零 DDL 迁移）；borrowSession/ensureMaterialized/create/readFrom 对齐；typecheck 0 错、biome/build 过、test 47 绿、覆盖率 lines 95.3%",
+  "acceptedCriteria": [
+    "对 0.1.2-rc.1 的 tsc --noEmit 0 错误 ✅",
+    "PersistenceBackend hooks 适配 SessionStorageMetadata；新增 materializeHeader ✅",
+    "子类实现 borrowSession/ensureMaterialized；readFrom 返回 SessionEventSuffix ✅",
+    "SessionHeader isSeeded/inheritedEventCount 往返与 seed_length 列语义对齐（零 DDL 迁移）✅",
+    "pnpm test 全绿（47）+ 覆盖率 lines 95.3%（≥90）；biome/build 通过 ✅",
+    "对外 @deepseek-ai/dsh@0.1.2-rc.1 harness 挂载 e2e（release 阶段跟进）⏳",
+    "更新 TECH_DEBT(TD-005=resolved)/CHANGELOG ✅"
+  ],
+  "techDebt": ["TD-005 resolved"],
+  "handoffTo": "release"
+}
