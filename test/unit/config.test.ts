@@ -67,6 +67,45 @@ describe("loadSettingsFromEnv", () => {
   });
 });
 
+describe("loadSettingsFromEnv：独享 SESSION_* 优先于共享 MYSQL_*", () => {
+  it("SESSION_* 设置时覆盖共享 MYSQL_*", () => {
+    const env = {
+      ...validEnv(),
+      SESSION_DATABASE: "dsh_session_excl",
+      SESSION_TABLE_PREFIX: "sess_",
+      SESSION_PORT: "4406",
+      SESSION_POOL_SIZE: "22",
+      SESSION_PACK_CHUNKS: "false",
+    };
+    const settings = loadSettingsFromEnv(env);
+    expect(settings.connection.database).toBe("dsh_session_excl");
+    expect(settings.connection.tablePrefix).toBe("sess_");
+    expect(settings.connection.port).toBe(4406);
+    expect(settings.pool.poolSize).toBe(22);
+    expect(settings.persistence.packChunks).toBe(false);
+    // 未设 SESSION_HOST → 回退共享 MYSQL_HOST。
+    expect(settings.connection.host).toBe("127.0.0.1");
+  });
+
+  it("SESSION_READ_HOST 配置读库时读库独立", () => {
+    const env = {
+      ...validEnv(),
+      SESSION_READ_HOST: "ro-host",
+      SESSION_READ_USER: "ro",
+      SESSION_READ_PASSWORD: "rop",
+    };
+    const settings = loadSettingsFromEnv(env);
+    expect(settings.readConnection.host).toBe("ro-host");
+    expect(settings.readConnection.user).toBe("ro");
+    expect(settings.readConnection).not.toBe(settings.connection);
+  });
+
+  it("SESSION_SCHEMA_AUTO_MIGRATE=false 关闭自动迁移", () => {
+    const env = { ...validEnv(), SESSION_SCHEMA_AUTO_MIGRATE: "false" };
+    expect(loadSettingsFromEnv(env).security.schemaAutoMigrate).toBe(false);
+  });
+});
+
 describe("mergeSettings", () => {
   it("用户覆盖优先级高于 env 基址", () => {
     const base = loadSettingsFromEnv(validEnv());

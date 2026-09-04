@@ -102,7 +102,25 @@ function intFromEnv(value: string | undefined, fallback: number, label: string):
 }
 
 /**
- * 加载 `.env`（若存在）并解析为完整设置。凭据与表前缀均由此注入。
+ * 读取一个配置项：本插件独享的 `SESSION_*` 优先，缺省回退到共享 `MYSQL_*`。
+ * 与 dsh-storage-mysql 的 `STORAGE_*`、dsh-credentials-mysql 的 `CREDENTIALS_*`
+ * 同一模式：多 MySQL 插件共用一套 `MYSQL_*` 部署，又各自能被独享前缀独立配置
+ * （指向专属库 / 专属表前缀 / 专属凭据），同库共存。
+ * @param env - 环境变量快照。
+ * @param key - 配置段名（如 `HOST`、`READ_HOST`、`POOL_SIZE`）。
+ * @returns 独享值或共享回退值，均可能为 undefined。
+ */
+function fromEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const independent = env[`SESSION_${key}`];
+  if (independent !== undefined && independent !== "") return independent;
+  const shared = env[`MYSQL_${key}`];
+  if (shared !== undefined && shared !== "") return shared;
+  return undefined;
+}
+
+/**
+ * 加载 `.env`（若存在）并解析为完整设置。凭据与表前缀均由此注入，
+ * 缺省复用共享 `MYSQL_*`，可用本插件独享的 `SESSION_*` 覆盖。
  * @param env - 环境变量快照（默认 process.env）。
  * @returns 合并后的后端设置；连接参数缺失即抛错（fail-closed）。
  */
@@ -110,89 +128,106 @@ export function loadSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): Mysql
   // 可选加载项目根目录 .env（不存在则忽略）。
   loadDotenv({ quiet: true });
 
-  const host = env.MYSQL_HOST;
-  const user = env.MYSQL_USER;
-  const password = env.MYSQL_PASSWORD;
-  const database = env.MYSQL_DATABASE;
-  const tablePrefix = env.MYSQL_TABLE_PREFIX;
-  if (host === undefined || host === "") {
-    throw new Error("MYSQL_HOST 缺失：连接凭据必须来自环境变量");
+  const host = fromEnv(env, "HOST");
+  const user = fromEnv(env, "USER");
+  const password = fromEnv(env, "PASSWORD");
+  const database = fromEnv(env, "DATABASE");
+  const tablePrefix = fromEnv(env, "TABLE_PREFIX");
+  if (host === undefined) {
+    throw new Error("缺少 SESSION_HOST / MYSQL_HOST：连接凭据必须来自环境变量");
   }
-  if (user === undefined || user === "") {
-    throw new Error("MYSQL_USER 缺失：连接凭据必须来自环境变量");
+  if (user === undefined) {
+    throw new Error("缺少 SESSION_USER / MYSQL_USER：连接凭据必须来自环境变量");
   }
-  if (password === undefined || password === "") {
-    throw new Error("MYSQL_PASSWORD 缺失：连接凭据必须来自环境变量");
+  if (password === undefined) {
+    throw new Error("缺少 SESSION_PASSWORD / MYSQL_PASSWORD：连接凭据必须来自环境变量");
   }
-  if (database === undefined || database === "") {
-    throw new Error("MYSQL_DATABASE 缺失");
-  }
-  if (tablePrefix === undefined || tablePrefix === "") {
-    throw new Error("MYSQL_TABLE_PREFIX 缺失：表前缀必须来自环境变量");
+  if (database === undefined) throw new Error("缺少 SESSION_DATABASE / MYSQL_DATABASE");
+  if (tablePrefix === undefined) {
+    throw new Error("缺少 SESSION_TABLE_PREFIX / MYSQL_TABLE_PREFIX：表前缀必须来自环境变量");
   }
 
-  const readHost = env.MYSQL_READ_HOST;
-  const readUser = env.MYSQL_READ_USER;
-  const readPassword = env.MYSQL_READ_PASSWORD;
+  const readHost = fromEnv(env, "READ_HOST");
+  const readUser = fromEnv(env, "READ_USER");
+  const readPassword = fromEnv(env, "READ_PASSWORD");
 
   const connection: ConnectionSettings = {
     host,
-    port: intFromEnv(env.MYSQL_PORT, 3306, "MYSQL_PORT"),
+    port: intFromEnv(fromEnv(env, "PORT"), 3306, "SESSION_PORT/MYSQL_PORT"),
     user,
     password,
     database,
     tablePrefix,
-    charset: env.MYSQL_CHARSET ?? DEFAULT_CHARSET,
+    charset: env.SESSION_CHARSET ?? env.MYSQL_CHARSET ?? DEFAULT_CHARSET,
     connectTimeout: intFromEnv(
-      env.MYSQL_CONNECT_TIMEOUT,
+      env.SESSION_CONNECT_TIMEOUT ?? env.MYSQL_CONNECT_TIMEOUT,
       DEFAULT_CONNECT_TIMEOUT_MS,
-      "MYSQL_CONNECT_TIMEOUT",
+      "SESSION_CONNECT_TIMEOUT/MYSQL_CONNECT_TIMEOUT",
     ),
     ssl: undefined,
-    sslRequired: env.MYSQL_SSL_REQUIRED === "true" || env.MYSQL_SSL_REQUIRED === "1",
+    sslRequired:
+      env.SESSION_SSL_REQUIRED === "true" ||
+      env.SESSION_SSL_REQUIRED === "1" ||
+      env.MYSQL_SSL_REQUIRED === "true" ||
+      env.MYSQL_SSL_REQUIRED === "1",
   };
 
-  // 读库：未配置 MYSQL_READ_HOST 时复用写库连接（测试同库模式）。
+  // 读库：未配置读库连接（SESSION_READ_HOST / MYSQL_READ_HOST）时复用写库连接（测试同库模式）。
   const readConnection: ConnectionSettings =
-    readHost !== undefined && readHost !== ""
+    readHost !== undefined
       ? {
           ...connection,
           host: readHost,
-          user: readUser !== undefined && readUser !== "" ? readUser : user,
+          user: readUser ?? user,
           password: readPassword ?? password,
         }
       : connection;
 
   const pool: PoolSettings = {
-    poolSize: intFromEnv(env.MYSQL_POOL_SIZE, 10, "MYSQL_POOL_SIZE"),
-    minIdle: intFromEnv(env.MYSQL_POOL_MIN_IDLE, 0, "MYSQL_POOL_MIN_IDLE"),
-    idleTimeout: intFromEnv(env.MYSQL_POOL_IDLE_TIMEOUT, 60_000, "MYSQL_POOL_IDLE_TIMEOUT"),
-    acquireTimeout: intFromEnv(
-      env.MYSQL_POOL_ACQUIRE_TIMEOUT,
-      10_000,
-      "MYSQL_POOL_ACQUIRE_TIMEOUT",
+    poolSize: intFromEnv(fromEnv(env, "POOL_SIZE"), 10, "SESSION_POOL_SIZE/MYSQL_POOL_SIZE"),
+    minIdle: intFromEnv(
+      fromEnv(env, "POOL_MIN_IDLE"),
+      0,
+      "SESSION_POOL_MIN_IDLE/MYSQL_POOL_MIN_IDLE",
     ),
-    queueLimit: intFromEnv(env.MYSQL_POOL_QUEUE_LIMIT, 0, "MYSQL_POOL_QUEUE_LIMIT"),
+    idleTimeout: intFromEnv(
+      fromEnv(env, "POOL_IDLE_TIMEOUT"),
+      60_000,
+      "SESSION_POOL_IDLE_TIMEOUT/MYSQL_POOL_IDLE_TIMEOUT",
+    ),
+    acquireTimeout: intFromEnv(
+      fromEnv(env, "POOL_ACQUIRE_TIMEOUT"),
+      10_000,
+      "SESSION_POOL_ACQUIRE_TIMEOUT/MYSQL_POOL_ACQUIRE_TIMEOUT",
+    ),
+    queueLimit: intFromEnv(
+      fromEnv(env, "POOL_QUEUE_LIMIT"),
+      0,
+      "SESSION_POOL_QUEUE_LIMIT/MYSQL_POOL_QUEUE_LIMIT",
+    ),
   };
 
   const persistence: PersistenceSettings = {
     writeBatchMaxDelayMs: intFromEnv(
-      env.MYSQL_WRITE_BATCH_DELAY_MS,
+      fromEnv(env, "WRITE_BATCH_DELAY_MS"),
       200,
-      "MYSQL_WRITE_BATCH_DELAY_MS",
+      "SESSION_WRITE_BATCH_DELAY_MS/MYSQL_WRITE_BATCH_DELAY_MS",
     ),
     preparedSessionCacheSize: intFromEnv(
-      env.MYSQL_PREPARED_CACHE_SIZE,
+      fromEnv(env, "PREPARED_CACHE_SIZE"),
       5,
-      "MYSQL_PREPARED_CACHE_SIZE",
+      "SESSION_PREPARED_CACHE_SIZE/MYSQL_PREPARED_CACHE_SIZE",
     ),
-    packChunks: env.MYSQL_PACK_CHUNKS !== "false",
+    // 布尔默认开：仅当任一来源显式 "false" 时关闭（与 storage 的 autoMigrate 语义一致）。
+    packChunks: env.SESSION_PACK_CHUNKS !== "false" && env.MYSQL_PACK_CHUNKS !== "false",
   };
 
-  const encryptionKey = env.ENCRYPTION_KEY;
+  // 加密 key 可选：独享 SESSION_ENCRYPTION_KEY > 共享 MYSQL_ENCRYPTION_KEY > 旧版裸 ENCRYPTION_KEY。
+  const encryptionKey = fromEnv(env, "ENCRYPTION_KEY") ?? env.ENCRYPTION_KEY;
   const security: SecuritySettings = {
     encryptionKey: encryptionKey !== undefined && encryptionKey !== "" ? encryptionKey : undefined,
-    schemaAutoMigrate: env.MYSQL_SCHEMA_AUTO_MIGRATE !== "false",
+    schemaAutoMigrate:
+      env.SESSION_SCHEMA_AUTO_MIGRATE !== "false" && env.MYSQL_SCHEMA_AUTO_MIGRATE !== "false",
   };
 
   return { connection, readConnection, pool, persistence, security };

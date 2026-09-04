@@ -14,7 +14,7 @@ DeepSeek Harness 的 **MySQL 会话持久化后端**——`dsh-session-persisten
 import { MysqlSessionPersistence } from '@sandersyao/dsh-session-persistence-mysql'
 
 await ctx.plugin(MysqlSessionPersistence, {
-  connection: { tablePrefix: process.env.MYSQL_TABLE_PREFIX },
+  connection: { tablePrefix: process.env.SESSION_TABLE_PREFIX ?? process.env.MYSQL_TABLE_PREFIX },
 })
 // ctx.sessionPersistence 现在由 MySQL 支撑。
 ```
@@ -27,23 +27,26 @@ await ctx.plugin(MysqlSessionPersistence, {
 ## 配置
 
 凭据、表前缀与连接池参数来自环境变量 / `.env`（见 `.env.example`）。插件 `Config` 全部可选——**凭据只来自环境变量**（绝不硬编码密码）。
+每个变量以本插件**独享 `SESSION_*` 优先，缺省回退共享 `MYSQL_*`**——与
+`dsh-storage-mysql`(`STORAGE_*`) / `dsh-credentials-mysql`(`CREDENTIALS_*`) 同一模式：
+多 MySQL 插件共用一套 `MYSQL_*` 部署，又各自可被独享前缀独立配置（指向专属库/表前缀）。
 
-| 环境变量 | 默认 | 作用 |
-|---|---|---|
-| `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | 写库（主库）地址。 |
-| `MYSQL_USER` / `MYSQL_PASSWORD` | —（必需） | 最小权限 DB 用户。 |
-| `MYSQL_DATABASE` | —（必需） | 目标数据库。 |
-| `MYSQL_TABLE_PREFIX` | —（必需） | 表前缀，校验 `^[A-Za-z0-9_]+$`。 |
-| `MYSQL_READ_HOST` / `MYSQL_READ_USER` / `MYSQL_READ_PASSWORD` | （空） | 读写分离读库；留空复用写库连接（同库模式）。 |
-| `MYSQL_SSL_REQUIRED` | `false` | 预留 TLS 强制位（暂缓，届时可能由云服务商提供）。 |
-| `MYSQL_POOL_SIZE` / `MYSQL_POOL_QUEUE_LIMIT` | `10` / `0` | 连接池大小。 |
-| `MYSQL_WRITE_BATCH_DELAY_MS` | `200` | 传给协调器的 batching 窗口。 |
-| `MYSQL_PREPARED_CACHE_SIZE` | `5` | 未发布会话 LRU 容量。 |
-| `MYSQL_PACK_CHUNKS` | `true` | 折叠 `assistant/chunk` run 为 packed 行。 |
-| `MYSQL_SCHEMA_AUTO_MIGRATE` | `true` | 启动自动迁移 schema；`false` 仅校验。 |
-| `ENCRYPTION_KEY` | （空） | 预留应用层字段加密 key（暂缓；空 = 明文）。 |
+| 独享 `SESSION_*` | 回退 `MYSQL_*` | 默认 | 作用 |
+|---|---|---|---|
+| `SESSION_HOST` / `SESSION_PORT` | `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | 写库（主库）地址。 |
+| `SESSION_USER` / `SESSION_PASSWORD` | `MYSQL_USER` / `MYSQL_PASSWORD` | —（必需） | 最小权限 DB 用户。 |
+| `SESSION_DATABASE` | `MYSQL_DATABASE` | —（必需） | 目标数据库。 |
+| `SESSION_TABLE_PREFIX` | `MYSQL_TABLE_PREFIX` | —（必需） | 表前缀，校验 `^[A-Za-z0-9_]+$`。 |
+| `SESSION_READ_HOST` / `SESSION_READ_USER` / `SESSION_READ_PASSWORD` | `MYSQL_READ_*` 同名 | （空） | 读写分离读库；留空复用写库连接（同库模式）。 |
+| `SESSION_SSL_REQUIRED` | `MYSQL_SSL_REQUIRED` | `false` | 预留 TLS 强制位（暂缓，届时可能由云服务商提供）。 |
+| `SESSION_POOL_SIZE` / `SESSION_POOL_QUEUE_LIMIT` | `MYSQL_POOL_*` 同名 | `10` / `0` | 连接池大小。 |
+| `SESSION_WRITE_BATCH_DELAY_MS` | `MYSQL_WRITE_BATCH_DELAY_MS` | `200` | 传给协调器的 batching 窗口。 |
+| `SESSION_PREPARED_CACHE_SIZE` | `MYSQL_PREPARED_CACHE_SIZE` | `5` | 未发布会话 LRU 容量。 |
+| `SESSION_PACK_CHUNKS` | `MYSQL_PACK_CHUNKS` | `true` | 折叠 `assistant/chunk` run 为 packed 行。 |
+| `SESSION_SCHEMA_AUTO_MIGRATE` | `MYSQL_SCHEMA_AUTO_MIGRATE` | `true` | 启动自动迁移 schema；`false` 仅校验。 |
+| `SESSION_ENCRYPTION_KEY` | `MYSQL_ENCRYPTION_KEY` | （空） | 预留应用层字段加密 key（暂缓；空 = 明文）。 |
 
-> **测试隔离**：自动化测试（`vitest`）运行在**独立测试库**上，避免触碰生产库——`MYSQL_TEST_DATABASE`（默认 `test`）在测试期间覆盖 `MYSQL_DATABASE`；`MYSQL_ROOT_PASSWORD` 仅由测试引导建库/授权使用。见 `docs/MANUAL_TEST_PLAN.md`。
+> **测试隔离**：自动化测试（`vitest`）运行在**独立测试库**上，避免触碰生产库——`SESSION_TEST_DATABASE`（缺省 `MYSQL_TEST_DATABASE`，默认 `test`）在测试期间覆盖 `SESSION_DATABASE`；`MYSQL_ROOT_PASSWORD` 仅由测试引导建库/授权使用。见 `docs/MANUAL_TEST_PLAN.md`。
 
 ## 存储布局
 

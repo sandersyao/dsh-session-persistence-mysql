@@ -14,7 +14,7 @@ The **MySQL durable session-persistence backend** for the DeepSeek Harness — a
 import { MysqlSessionPersistence } from '@sandersyao/dsh-session-persistence-mysql'
 
 await ctx.plugin(MysqlSessionPersistence, {
-  connection: { tablePrefix: process.env.MYSQL_TABLE_PREFIX },
+  connection: { tablePrefix: process.env.SESSION_TABLE_PREFIX ?? process.env.MYSQL_TABLE_PREFIX },
 })
 // ctx.sessionPersistence is now MySQL-backed.
 ```
@@ -27,23 +27,24 @@ await ctx.plugin(MysqlSessionPersistence, {
 ## Configuration
 
 Credentials, table prefix and pool tuning come from environment variables / a `.env` file (see `.env.example`). The plugin `Config` is fully optional — environment is the source of truth for credentials (never hard-code a password).
+Each variable reads the plugin-exclusive **`SESSION_*` first and falls back to the shared `MYSQL_*`** — the same pattern as `dsh-storage-mysql`(`STORAGE_*`) and `dsh-credentials-mysql`(`CREDENTIALS_*`): the MySQL plugins can share one `MYSQL_*` deployment yet each be configured independently (own database / table prefix).
 
-| Env | Default | Purpose |
-|---|---|---|
-| `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | Write (primary) host. |
-| `MYSQL_USER` / `MYSQL_PASSWORD` | — (required) | Least-privilege DB user. |
-| `MYSQL_DATABASE` | — (required) | Target database. |
-| `MYSQL_TABLE_PREFIX` | — (required) | Table prefix; validated against `^[A-Za-z0-9_]+$`. |
-| `MYSQL_READ_HOST` / `MYSQL_READ_USER` / `MYSQL_READ_PASSWORD` | (empty) | Read replica for read/write split; empty reuses the write connection (same-store mode). |
-| `MYSQL_SSL_REQUIRED` | `false` | Reserved for TLS enforcement (deferred; may be provided by a cloud provider). |
-| `MYSQL_POOL_SIZE` / `MYSQL_POOL_QUEUE_LIMIT` | `10` / `0` | Pool sizing. |
-| `MYSQL_WRITE_BATCH_DELAY_MS` | `200` | Batching window passed to the coordinator. |
-| `MYSQL_PREPARED_CACHE_SIZE` | `5` | Unpublished-session LRU size. |
-| `MYSQL_PACK_CHUNKS` | `true` | Fold `assistant/chunk` runs into packed rows. |
-| `MYSQL_SCHEMA_AUTO_MIGRATE` | `true` | Auto-migrate schema on startup; `false` only validates. |
-| `ENCRYPTION_KEY` | (empty) | Reserved for application-level field encryption (deferred; empty = plaintext). |
+| Exclusive `SESSION_*` | Fallback `MYSQL_*` | Default | Purpose |
+|---|---|---|---|
+| `SESSION_HOST` / `SESSION_PORT` | `MYSQL_HOST` / `MYSQL_PORT` | `127.0.0.1` / `3306` | Write (primary) host. |
+| `SESSION_USER` / `SESSION_PASSWORD` | `MYSQL_USER` / `MYSQL_PASSWORD` | — (required) | Least-privilege DB user. |
+| `SESSION_DATABASE` | `MYSQL_DATABASE` | — (required) | Target database. |
+| `SESSION_TABLE_PREFIX` | `MYSQL_TABLE_PREFIX` | — (required) | Table prefix; validated against `^[A-Za-z0-9_]+$`. |
+| `SESSION_READ_HOST` / `SESSION_READ_USER` / `SESSION_READ_PASSWORD` | `MYSQL_READ_*` equivalents | (empty) | Read replica for read/write split; empty reuses the write connection (same-store mode). |
+| `SESSION_SSL_REQUIRED` | `MYSQL_SSL_REQUIRED` | `false` | Reserved for TLS enforcement (deferred; may be provided by a cloud provider). |
+| `SESSION_POOL_SIZE` / `SESSION_POOL_QUEUE_LIMIT` | `MYSQL_POOL_*` equivalents | `10` / `0` | Pool sizing. |
+| `SESSION_WRITE_BATCH_DELAY_MS` | `MYSQL_WRITE_BATCH_DELAY_MS` | `200` | Batching window passed to the coordinator. |
+| `SESSION_PREPARED_CACHE_SIZE` | `MYSQL_PREPARED_CACHE_SIZE` | `5` | Unpublished-session LRU size. |
+| `SESSION_PACK_CHUNKS` | `MYSQL_PACK_CHUNKS` | `true` | Fold `assistant/chunk` runs into packed rows. |
+| `SESSION_SCHEMA_AUTO_MIGRATE` | `MYSQL_SCHEMA_AUTO_MIGRATE` | `true` | Auto-migrate schema on startup; `false` only validates. |
+| `SESSION_ENCRYPTION_KEY` | `MYSQL_ENCRYPTION_KEY` | (empty) | Reserved for application-level field encryption (deferred; empty = plaintext). |
 
-> **Test isolation.** Automated tests (`vitest`) run against a **separate** database to avoid touching the production one: `MYSQL_TEST_DATABASE` (default `test`) overrides `MYSQL_DATABASE` during tests, and `MYSQL_ROOT_PASSWORD` is used only by the test harness to create/grant the test DB. See `docs/MANUAL_TEST_PLAN.md`.
+> **Test isolation.** Automated tests (`vitest`) run against a **separate** database to avoid touching the production one: `SESSION_TEST_DATABASE` (fallback `MYSQL_TEST_DATABASE`, default `test`) overrides `SESSION_DATABASE` during tests, and `MYSQL_ROOT_PASSWORD` is used only by the test harness to create/grant the test DB. See `docs/MANUAL_TEST_PLAN.md`.
 
 ## Storage layout
 

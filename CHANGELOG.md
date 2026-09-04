@@ -2,6 +2,13 @@
 
 本项目为 Pre-1.0，格式版本 `SESSION_FORMAT_VERSION`(v0)，遵循 [语义化版本](https://semver.org/)。版本对齐当前运行的 dsh `^0.1.2-rc.1`。
 
+## Unreleased
+
+### 配置：独享 `SESSION_*` 环境变量
+- 环境变量加载改为本插件独享 `SESSION_*` 优先、缺省回退共享 `MYSQL_*`（`fromEnv` 模式，与 `dsh-storage-mysql` 的 `STORAGE_*`、`dsh-credentials-mysql` 的 `CREDENTIALS_*` 一致）：多 MySQL 插件共用一套 `MYSQL_*` 又可各自独立配置。
+- 覆盖项含连接、读库、池、持久化语义与 schema；加密 key 走 `SESSION_ENCRYPTION_KEY` > `MYSQL_ENCRYPTION_KEY` > 旧版裸 `ENCRYPTION_KEY`。
+- 测试隔离改由独享 `SESSION_TEST_DATABASE` 驱动；`.env.example` 与 README 环境表同步。
+
 ## 0.1.2-rc.1 (2026-09-04) —— 迁移至 dsh v0.1.2-rc.1 契约
 
 ### 兼容对齐（T6）
