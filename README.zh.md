@@ -24,6 +24,18 @@ await ctx.plugin(MysqlSessionPersistence, {
 - **在 dsh profile 中试用且不影响现有会话** —— `docs/DSH_PROFILE_TRIAL.md`。
 - **生产 / npm 安装与 `cordis.patch.yml` 集成（替换默认 JSONL 后端）** —— `docs/DEPLOYMENT.md` §8。
 
+## 配套插件（分布式 dsh 部署）
+
+本插件与以下三个配套插件协同、在共享 MySQL 之上组成一套**分布式 dsh 部署**：
+`dsh-storage-mysql` 与 `dsh-credentials-mysql` 把默认存储、凭据后端切到 MySQL；
+`dsh-workspace-bootstrap` 在空库启动时声明式自举一个默认工作区，让首会话可开始。
+
+| 插件 | GitHub 仓库 | npm 包页面 |
+| --- | --- | --- |
+| `@sandersyao/dsh-workspace-bootstrap` | https://github.com/sandersyao/dsh-workspace-bootstrap | https://www.npmjs.com/package/@sandersyao/dsh-workspace-bootstrap |
+| `@sandersyao/dsh-storage-mysql` | https://github.com/sandersyao/dsh-storage-mysql | https://www.npmjs.com/package/@sandersyao/dsh-storage-mysql |
+| `@sandersyao/dsh-credentials-mysql` | https://github.com/sandersyao/dsh-credentials-mysql | https://www.npmjs.com/package/@sandersyao/dsh-credentials-mysql |
+
 ## 配置
 
 凭据、表前缀与连接池参数来自环境变量 / `.env`（见 `.env.example`）。插件 `Config` 全部可选——**凭据只来自环境变量**（绝不硬编码密码）。

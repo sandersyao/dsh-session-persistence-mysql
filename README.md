@@ -24,6 +24,19 @@ await ctx.plugin(MysqlSessionPersistence, {
 - **Try it in a dsh profile without touching existing sessions** — `docs/DSH_PROFILE_TRIAL.md`.
 - **Production / npm install & `cordis.patch.yml` integration (replace the default JSONL backend)** — `docs/DEPLOYMENT.md` §8.
 
+## Companion plugins (distributed dsh deployment)
+
+This plugin runs alongside three sibling plugins on a shared MySQL to form a **distributed dsh
+deployment**: `dsh-storage-mysql` and `dsh-credentials-mysql` switch the default storage and
+credentials backends to MySQL, and `dsh-workspace-bootstrap` declaratively bootstraps a default
+workspace so the first session can start on an empty database.
+
+| Plugin | GitHub repository | npm package page |
+| --- | --- | --- |
+| `@sandersyao/dsh-workspace-bootstrap` | https://github.com/sandersyao/dsh-workspace-bootstrap | https://www.npmjs.com/package/@sandersyao/dsh-workspace-bootstrap |
+| `@sandersyao/dsh-storage-mysql` | https://github.com/sandersyao/dsh-storage-mysql | https://www.npmjs.com/package/@sandersyao/dsh-storage-mysql |
+| `@sandersyao/dsh-credentials-mysql` | https://github.com/sandersyao/dsh-credentials-mysql | https://www.npmjs.com/package/@sandersyao/dsh-credentials-mysql |
+
 ## Configuration
 
 Credentials, table prefix and pool tuning come from environment variables / a `.env` file (see `.env.example`). The plugin `Config` is fully optional — environment is the source of truth for credentials (never hard-code a password).
