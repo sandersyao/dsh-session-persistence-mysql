@@ -1,7 +1,7 @@
-# 两处本地修复的动机 —— raw-artifact 导出 & append 幂等（待按 0.1.5-rc.1 重做）
+# 两处本地修复的动机 —— raw-artifact 导出 & append 幂等（0.1.5 已重做）
 
-> 记录动机，供后续在 dsh 0.1.5-rc.1 接缝上重做。原实现提交为 `5261100`（导出）与 `7e78fa4`（幂等），
-> 已从 `main` 撤销（`main` 回到 `origin/main`），原提交保留在本地 tag `archive/main-0.1.2-local`。
+> 记录动机：原 0.1.2 实现提交 `5261100`（导出）与 `7e78fa4`（幂等）已从 `main` 撤销并丢弃，
+> 0.1.5-rc.1 上已按下文重做（append 幂等）或确认无需实现（raw-artifact，由上游承接）。
 > 两处都源自线上分布式（共享 MySQL）环境的实际故障：Session 导出 HTTP 501、追加问题时
 > `Duplicate entry 'session-...-557' for key 'dsh_session_events.PRIMARY'`。
 
