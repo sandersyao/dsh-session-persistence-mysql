@@ -1,6 +1,7 @@
+import type { SessionHeader } from "@deepseek-ai/dsh-session";
 import { describe, expect, it } from "vitest";
 
-import { encodeStorageRows } from "../../src/mysql-codec.js";
+import { decodeStoredRows, encodeStorageRows } from "../../src/mysql-codec.js";
 import { balancedTurnEvents, chunkEvent, structuralEvent } from "../helpers/events.js";
 
 /**
@@ -22,6 +23,14 @@ describe("encodeStorageRows（0.1.5 透传语义）", () => {
     const rows = encodeStorageRows(chunks);
     expect(rows).toHaveLength(chunks.length);
     expect(rows.every((r) => r.rowType === null)).toBe(true);
+  });
+
+  it("decodeStoredRows 对非事件 payload loud-fail", () => {
+    const meta = { version: 3, id: "s", createdAt: 1, isSeeded: false } as unknown as SessionHeader;
+    expect(() => decodeStoredRows(meta, [{ payload: "123" }])).toThrow(/not a SessionEvent/);
+    expect(() => decodeStoredRows(meta, [{ payload: JSON.stringify({ seq: 0 }) }])).toThrow(
+      /not a SessionEvent/,
+    );
   });
 
   it("混合事件（chunk + 结构）每条独立一行", () => {
