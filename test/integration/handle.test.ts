@@ -156,7 +156,7 @@ describe("MysqlSessionPersistence / SessionHandle（服务级 API + 后端错误
     await wh.close();
   });
 
-  it("后端错误分支：重复物化 / 重复事件 / persistHeader 重复 / 缺行锁 / assertReadable", async () => {
+  it("后端错误分支：异内容重复 / persistHeader 重复 / 缺行锁 / assertReadable", async () => {
     handle = await setupTestDb();
     const { persistence, backend } = handle;
     const id = "s-be";
@@ -166,8 +166,10 @@ describe("MysqlSessionPersistence / SessionHandle（服务级 API + 后端错误
     await wh.append(balancedTurnEvents(0));
     await wh.flush();
 
-    await expect(backend.persistBatch(meta, [], false, off)).rejects.toThrow();
-    await expect(backend.persistBatch(meta, balancedTurnEvents(0), true, off)).rejects.toThrow();
+    // 同 seq 但内容不同 → 真冲突（幂等只放行内容一致的重放）。
+    const conflict = balancedTurnEvents(0).map((e, i) => (i === 0 ? { ...e, time: 999 } : e));
+    await expect(backend.persistBatch(meta, conflict as never, false, off)).rejects.toThrow();
+    await expect(backend.persistBatch(meta, conflict as never, true, off)).rejects.toThrow();
     await expect(backend.persistHeader(meta, off)).rejects.toThrow();
     await expect(backend.assertReadable("nope" as never)).rejects.toThrow();
 
@@ -176,5 +178,27 @@ describe("MysqlSessionPersistence / SessionHandle（服务级 API + 后端错误
       backend.persistBatch(header("s-no-lock"), balancedTurnEvents(0), true, off),
     ).rejects.toThrow();
     await wh.close();
+  });
+
+  it("导出路径：open(read) 全量读取并可序列化为 canonical JSONL", async () => {
+    handle = await setupTestDb();
+    const { persistence } = handle;
+    const id = "s-export";
+    const wh = await persistence.create(header(id));
+    await wh.append(balancedTurnEvents(0));
+    await wh.flush();
+    await wh.close();
+
+    // 0.1.5 `dsh-session-log-export` 的读取路径：open(read) + read(0, undefined)。
+    const rh = await persistence.open(id, "read");
+    const { events } = await rh.read(0, undefined);
+    const headerLine = JSON.stringify({ type: "session", ...rh.header });
+    const content = `${headerLine}\n${events.map((e) => JSON.stringify(e)).join("\n")}\n`;
+    await rh.close();
+
+    expect(events.map((e) => e.seq)).toEqual([0, 1, 2, 3]);
+    const lines = content.trimEnd().split("\n");
+    expect(JSON.parse(lines[0] as string).type).toBe("session");
+    expect(lines).toHaveLength(1 + events.length);
   });
 });

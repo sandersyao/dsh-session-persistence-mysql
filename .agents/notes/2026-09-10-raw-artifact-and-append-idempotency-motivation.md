@@ -43,3 +43,14 @@
 - 导出：`readRaw` 返回的 JSONL 经解码后事件与原日志逐条一致；chunk 折叠/seed/provenance 往返无损。
 - 幂等：同内容重放成功且不产生重复行；同 seq 不同内容抛出明确冲突错误。
 - 门禁：`typecheck` / `lint` / `build` / `test:coverage`（lines≥90）。
+
+## 0.1.5 重做结果（2026-09-10）
+- **append 幂等：已重做**。移植到 0.1.5 的 `MysqlBackend.persistBatchOnce`：sessions INSERT 与 events INSERT
+  两处重复键都先 `committedMatches` 做“同 seq 内容逐条一致”判定，一致 → 回滚后 no-op；不一致 →
+  `SessionAlreadyExistsError` / 明确冲突错误。回归见 `test/integration/backend.test.ts`。
+  注：这同时修正了 `persistBatchOnce` 里“events 重复 → `SessionHandleClosedError`”的旧语义。
+- **raw-artifact 导出：确认无需实现**。0.1.5 的 `@deepseek-ai/dsh-session-log-export@0.1.5-rc.1` 已改为
+  经 `sessionPersistence.open(id,"read")` + `SessionHandle.read()` 读取，并自行 `serializeSessionLog`
+  生成 canonical JSONL；`SessionPersistence` 抽象面不再有 `supportsRawArtifacts`/`readRaw`，
+  旧的 501 由上游设计消除。本插件只要 `open`/`read` 正确即天然支持导出。
+  已加导出路径回归 `test/integration/handle.test.ts`（open(read) + read(0, undefined) 全量读并可序列化）。

@@ -21,7 +21,7 @@ function header(id: string): SessionHeader {
 }
 
 describe("后端级：跨进程双写与 fork 边界", () => {
-  it("跨进程双写：两个后端写同一会话的重叠 seq，其中一个被拒", async () => {
+  it("跨进程双写：重叠 seq 且内容不同 → 被拒（真冲突）", async () => {
     handle = await setupTestDb();
     const { settings, prefix, persistence } = handle;
     await persistence.dispose();
@@ -35,14 +35,33 @@ describe("后端级：跨进程双写与 fork 边界", () => {
 
     const id = "sess-dual-writer";
     const meta = header(id);
+    const first = balancedTurnEvents(0);
     // 写者 1：materialize 并写 seq 0-3。
-    await handle.backend.persistBatch(meta, balancedTurnEvents(0), false, 0);
-    // 写者 2：以同一 id 再次 materialize 写 seq 0-3 → 主键冲突，必须被拒。
-    await expect(backend2.persistBatch(meta, balancedTurnEvents(0), false, 0)).rejects.toThrow();
+    await handle.backend.persistBatch(meta, first, false, 0);
+    // 写者 2：同 seq 但内容不同 → 真冲突，必须被拒（幂等只放行内容一致的重放）。
+    const conflicting = first.map((e, i) => (i === 0 ? { ...e, time: 999 } : e));
+    await expect(backend2.persistBatch(meta, conflicting as never, false, 0)).rejects.toThrow();
 
     // 清理第二后端（表格由 afterEach 统一 drop，这里只关池）。
     if (readPool2 === writePool2) await writePool2.end();
     else await Promise.all([writePool2.end(), readPool2.end()]);
+  });
+
+  it("同批重放（提交成功但 ack 丢失）→ 幂等 no-op，不重复写、revision 不变", async () => {
+    handle = await setupTestDb();
+    const { backend } = handle;
+    const id = "sess-replay";
+    const meta = header(id);
+    const batch = balancedTurnEvents(0);
+    await backend.persistBatch(meta, batch, false, 0);
+    const before = (await backend.readStoredLog(id as never)).revision;
+    // 首批重放：sessions 主键重复 → 幂等 no-op。
+    await backend.persistBatch(meta, batch, false, 0);
+    // 已 materialize 的重放：events 主键重复 → 幂等 no-op。
+    await backend.persistBatch(meta, batch, true, 0);
+    const after = await backend.readStoredLog(id as never);
+    expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3]);
+    expect(after.revision).toBe(before);
   });
 
   it("seeded 会话：seed_length 列编码 inheritedEventCount，读回 isSeeded=true", async () => {

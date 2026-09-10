@@ -211,6 +211,57 @@ export class MysqlBackend {
   }
 
   /**
+   * 事件内容比较用规范化串：按固定键序序列化（type/seq/time/ignorable/data +
+   * 条件字段），避免两端对象键插入顺序不同造成“同内容判为不同”。
+   * @param event - 会话事件。
+   * @returns 规范化 JSON 文本。
+   */
+  private eventCanonical(event: SessionEvent): string {
+    const ev = event as SessionEvent & {
+      sourceEventSeqs?: readonly number[];
+      surfaceOp?: unknown;
+    };
+    const canonical: Record<string, unknown> = {
+      type: event.type,
+      seq: event.seq,
+      time: event.time,
+      ignorable: event.ignorable,
+      data: event.data,
+    };
+    if (ev.sourceEventSeqs !== undefined) canonical.sourceEventSeqs = ev.sourceEventSeqs;
+    if (ev.surfaceOp !== undefined) canonical.surfaceOp = ev.surfaceOp;
+    return JSON.stringify(canonical);
+  }
+
+  /**
+   * 校验“本批事件是否已是该会话已提交日志的一部分（内容逐条一致）”。
+   *
+   * 为什么需要：调用方在「写库成功但 ack 前连接断开/超时」时会带着同一个
+   * next-seq 重发同一批事件（at-least-once）；此时主键重复是「已提交的重放」，
+   * 应按幂等 no-op 成功返回，而不是抛重复键让整个轮次失败。比较在**解码后的
+   * 事件**上进行，并对逐条 seq 校验内容，杜绝“同 seq 不同内容”的真冲突被误判。
+   * @param header - 会话头（提供 id 与解码错误信息）。
+   * @param events - 待写入的事件批次。
+   * @returns 全部事件都已在库中且内容一致时为 true（可安全 no-op）。
+   */
+  private async committedMatches(
+    header: SessionHeader,
+    events: readonly SessionEvent[],
+  ): Promise<boolean> {
+    if (events.length === 0) return true;
+    const rows = await this.readEventRows(header.id, this.readPool);
+    const existing = new Map<number, string>();
+    for (const event of decodeStoredRows(header, rows)) {
+      existing.set(event.seq, this.eventCanonical(event));
+    }
+    for (const event of events) {
+      const canonical = existing.get(event.seq);
+      if (canonical === undefined || canonical !== this.eventCanonical(event)) return false;
+    }
+    return true;
+  }
+
+  /**
    * 读取并校验整个会话日志。session 不存在抛 SessionPersistenceNotFoundError。
    * @param id - 会话 id。
    * @param signal - 取消信号。
@@ -326,6 +377,10 @@ export class MysqlBackend {
           );
         } catch (error) {
           if (this.isDuplicateKey(error)) {
+            // 首批重放：会话行已存在。内容一致 → 幂等 no-op；否则视为真冲突。
+            const matches = await this.committedMatches(header, events);
+            await conn.rollback();
+            if (matches) return;
             throw new SessionAlreadyExistsError(header.id);
           }
           throw error;
@@ -355,7 +410,14 @@ export class MysqlBackend {
           );
         } catch (error) {
           if (this.isDuplicateKey(error)) {
-            throw new SessionHandleClosedError(header.id, "append");
+            // 已 materialize 的重放：events 主键已存在。内容一致 → no-op；否则真冲突。
+            const matches = await this.committedMatches(header, events);
+            await conn.rollback();
+            if (matches) return;
+            throw new Error(
+              `append 冲突：会话 ${JSON.stringify(header.id)} 在相同 seq 上已有不同内容的事件` +
+                `（疑似多个驱动方并发写同一会话：seq 由调用方分配，未跨进程串行化）`,
+            );
           }
           throw error;
         }
@@ -371,7 +433,8 @@ export class MysqlBackend {
       }
       await conn.commit();
     } catch (error) {
-      await conn.rollback();
+      // 内层幂等分支可能已回滚；重复回滚无害，吞掉其错误。
+      await conn.rollback().catch(() => {});
       throw error;
     } finally {
       conn.release();

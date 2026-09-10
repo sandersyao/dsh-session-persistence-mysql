@@ -2,6 +2,16 @@
 
 本项目为 Pre-1.0，遵循 [语义化版本](https://semver.org/)。插件版本对齐当前运行的 dsh：`0.1.x` 对齐 `^0.1.5-rc.x`。
 
+## Unreleased
+
+### 修复：append 重复主键幂等（0.1.5 重做）
+- 0.1.5 写路径（`persistBatch`/`persistBatchOnce`）在重复键（errno 1062）时读回已提交日志逐条比较：内容一致 → 幂等 no-op（“提交成功但 ack 丢失”的 at-least-once 重放）；同 seq 不同内容 → 抛明确冲突错误，不再静默。
+- 回归：`test/integration/backend.test.ts`（同内容重放成功且 revision 不变；异内容被拒）。
+
+### 说明：raw-artifact 导出在 0.1.5 已由上游承接
+- 0.1.5 的 `dsh-session-log-export` 改为经 `sessionPersistence.open(id,"read")` + `SessionHandle.read()` 读取并自行序列化 canonical JSONL；接缝不再有 `supportsRawArtifacts`/`readRaw`，本插件无需实现 raw-artifact。
+- 新增导出路径回归：`test/integration/handle.test.ts` 锁定 `open`/`read` 全量可用并可序列化。
+
 ## 0.1.5-rc.1 (2026-09-10) —— 适配 dsh 0.1.5-rc.1 契约
 
 ### 同上（rc.1 与 alpha.2 public surface 完全一致）
