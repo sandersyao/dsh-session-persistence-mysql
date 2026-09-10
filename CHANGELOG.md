@@ -2,23 +2,22 @@
 
 本项目为 Pre-1.0，遵循 [语义化版本](https://semver.org/)。插件版本对齐当前运行的 dsh：`0.1.x` 对齐 `^0.1.5-rc.x`。
 
-## Unreleased
-
-### 修复：append 重复主键幂等（0.1.5 重做）
-- 0.1.5 写路径（`persistBatch`/`persistBatchOnce`）在重复键（errno 1062）时读回已提交日志逐条比较：内容一致 → 幂等 no-op（“提交成功但 ack 丢失”的 at-least-once 重放）；同 seq 不同内容 → 抛明确冲突错误，不再静默。
-- 回归：`test/integration/backend.test.ts`（同内容重放成功且 revision 不变；异内容被拒）。
-
-### 说明：raw-artifact 导出在 0.1.5 已由上游承接
-- 0.1.5 的 `dsh-session-log-export` 改为经 `sessionPersistence.open(id,"read")` + `SessionHandle.read()` 读取并自行序列化 canonical JSONL；接缝不再有 `supportsRawArtifacts`/`readRaw`，本插件无需实现 raw-artifact。
-- 新增导出路径回归：`test/integration/handle.test.ts` 锁定 `open`/`read` 全量可用并可序列化。
-
 ## 0.1.5-rc.1 (2026-09-10) —— 适配 dsh 0.1.5-rc.1 契约
 
-### 同上（rc.1 与 alpha.2 public surface 完全一致）
+### 适配
 - peer/dev 升至 `@deepseek-ai/dsh-session` / `dsh-session-persistence` `^0.1.5-rc.1`；其他 `@deepseek-ai/dsh-*` 也对齐到 `0.1.5-rc.1`。
-- 源码无需改动：`SESSION_FORMAT_VERSION=3`、`SessionPersistence` 抽象方法签名、`SessionHandle` 接口、storage contract 与 alpha.2 完全一致。
-- 门禁全绿：typecheck 0 错误、build、test **48/48** 通过、smoke PASS。
+- `SESSION_FORMAT_VERSION=3`；子类直接实现 `SessionPersistence` 抽象方法 `create` / `open` / `flush` / `stat` / `list`（`SessionHandle` 接口 + storage contract），去掉 `PersistenceCoordinator` 中介。
 - 移除无实际检查的 `invariants` 伴生入口（`src/invariant.ts`、`./invariant` 导出、`tsup` entry）与 `@deepseek-ai/dsh-invariants` 依赖，对齐官方 `dsh-session-persistence-jsonl`（不发布该伴生入口）。
+- 清理已失效配置：`PersistenceSettings`/`packChunks` 以及 README/.env.example 中的 `WRITE_BATCH_DELAY_MS` / `PREPARED_CACHE_SIZE` / `PACK_CHUNKS`（0.1.5 起 batching 下沉、chunk 折叠由上游承担）。
+
+### 修复
+- **append 重复主键幂等**：`persistBatchOnce` 在重复键（errno 1062）时按「同 seq 内容逐条一致」判定——内容一致 → 幂等 no-op（“提交成功但 ack 丢失”的 at-least-once 重放）；同 seq 不同内容 → 明确冲突错误。回归见 `test/integration/backend.test.ts`。
+- **导出 501 由上游承接**：0.1.5 的 `dsh-session-log-export` 经 `open(id,"read")` + `SessionHandle.read()` 读取并自行序列化 canonical JSONL；接缝已无 `supportsRawArtifacts`/`readRaw`，本插件 `open`/`read` 即天然支持导出（`test/integration/handle.test.ts` 回归）。
+
+### CI / 测试
+- 修复 PR #2 的全部 lint（16 项）与 `scripts/smoke.mjs` 本地绝对路径、空 invariants 伴生接线。
+- 补齐 `mysql-handle` / `index` / `backend` 定向测试，覆盖率门禁达标。
+- 门禁全绿：typecheck 0 错误、biome、build、**test 75/75**、coverage lines **97.95%**、smoke PASS。
 
 ## 0.1.5-alpha.1 (2026-09-10) —— 适配 dsh 0.1.5-alpha.x 契约
 
