@@ -1,7 +1,16 @@
+import { SESSION_FORMAT_VERSION } from "@deepseek-ai/dsh-session";
 import type { Pool, RowDataPacket } from "mysql2/promise";
 
-/** 当前 schema 结构版本号。递增代表一次结构变更（需新增迁移）。 */
-export const SCHEMA_VERSION = 1;
+/**
+ * 当前 schema 结构版本号。递增代表一次结构变更（需新增迁移）。
+ *
+ * 版本语义：
+ * - v1：0.1.2 时代的初始 schema（version 列写 0，seed_length 仅作 isSeeded 标志）。
+ * - v2：0.1.5 起的会话格式升级——版本号对齐到 SESSION_FORMAT_VERSION (3)，
+ *        seed_length 列语义不变（仍是 isSeeded 时存 inheritedEventCount），
+ *        旧 v0 行在迁移时把 sessions.version 刷到 3，避免 assertVersion 误拒。
+ */
+export const SCHEMA_VERSION = 2;
 
 /**
  * 表前缀合法字符集：仅允许字母、数字、下划线，防止标识符注入。
@@ -55,7 +64,7 @@ export function tableNames(prefix: string): TableNames {
 export function sessionsDdl(name: string): string {
   return `CREATE TABLE IF NOT EXISTS \`${name}\` (
   session_id       VARCHAR(255) NOT NULL COMMENT '品牌化会话 id；唯一标识。仅参数化绑定，绝不作 SQL 标识符拼接',
-  version          INT NOT NULL COMMENT '会话头格式版本（SESSION_FORMAT_VERSION，当前 v0）',
+  version          INT NOT NULL COMMENT '会话头格式版本；写入 SESSION_FORMAT_VERSION (v3)。schema 迁移会把旧 v0 行刷到当前版本',
   created_at       BIGINT NOT NULL COMMENT '会话创建时间（epoch 毫秒）；重建时还原原始 createdAt',
   cwd              TEXT NULL COMMENT '会话工作目录（可选），用于导航/隔离',
   parent_session   VARCHAR(255) NULL COMMENT '父会话 id（lineage，可选）',
@@ -114,7 +123,38 @@ export interface EnsureSchemaOptions {
 }
 
 /**
+ * 执行一次 schema 迁移。已知迁移列表（顺序执行）：
+ *
+ * - v1 → v2：把 sessions.version < SESSION_FORMAT_VERSION 的行升级到当前格式版本。
+ *   旧版本（0.1.2-rc.1）写入了 v0；新版本（0.1.5+）的 assertVersion 会拒读 v0，
+ *   因此迁移必须把 sessions.version 一次性刷到 SESSION_FORMAT_VERSION (3)。
+ *   seed_length 列语义不变（保持 isSeeded 时存 inheritedEventCount）。
+ *
+ * 迁移是幂等的：再跑一次不会重复刷（更新 where 子句限定旧版本）。
+ *
+ * @param pool - 用于执行 DDL/DML 的写连接池。
+ * @param prefix - 表前缀。
+ * @param fromVersion - 当前已应用版本。
+ */
+export async function applyMigrations(
+  pool: Pool,
+  prefix: string,
+  fromVersion: number,
+): Promise<void> {
+  const names = tableNames(prefix);
+  if (fromVersion < 2) {
+    await pool.query(`UPDATE \`${names.sessions}\` SET version = ? WHERE version < ?`, [
+      SESSION_FORMAT_VERSION,
+      SESSION_FORMAT_VERSION,
+    ]);
+  }
+}
+
+/**
  * 确保 schema 就绪：幂等建表 + 版本校验/迁移。
+ *
+ * 流程：建表 → 读最大已应用版本 → 若落后，按顺序逐版本迁移。
+ *
  * @param pool - 用于执行 DDL 的写连接池。
  * @param prefix - 表前缀。
  * @param options - 迁移选项。
@@ -148,5 +188,9 @@ export async function ensureSchema(
   if (!options.autoMigrate) {
     throw new Error(`schema 版本落后：已应用 ${applied}，期望 ${expected}，且禁止自动迁移。`);
   }
+
+  await applyMigrations(pool, prefix, applied);
+
+  // 记录新版本。
   await pool.query(`INSERT INTO \`${names.meta}\` (version) VALUES (?)`, [expected]);
 }

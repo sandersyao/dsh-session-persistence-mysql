@@ -1,9 +1,9 @@
 import { Context } from "@deepseek-ai/cordis";
 import SessionStore from "@deepseek-ai/dsh-session";
-import { PersistenceCoordinator } from "@deepseek-ai/dsh-session-persistence";
 import type { Pool } from "mysql2/promise";
 
 import { loadSettingsFromEnv, type MysqlSettings, mergeSettings } from "../../src/config.js";
+import { MysqlSessionPersistence } from "../../src/index.js";
 import { MysqlBackend } from "../../src/mysql-backend.js";
 import { createReadPool, createWritePool } from "../../src/pool.js";
 import { ensureSchema, tableNames } from "../../src/schema.js";
@@ -12,27 +12,27 @@ import { ensureSchema, tableNames } from "../../src/schema.js";
 let runCounter = 0;
 
 /**
- * 一次测试装配的句柄：后端、协调器、上下文与清理入口。
+ * 一次测试装配的句柄：插件、后端、上下文与清理入口。
  */
 export interface TestDbHandle {
   /** 合并后的设置（表前缀唯一）。 */
   readonly settings: MysqlSettings;
   /** 后端实例。 */
   readonly backend: MysqlBackend;
-  /** 协调器实例。 */
-  readonly coordinator: PersistenceCoordinator<undefined>;
+  /** 服务实例（`ctx.sessionPersistence`）。 */
+  readonly persistence: MysqlSessionPersistence;
   /** Cordis 上下文。 */
   readonly ctx: Context;
   /** 写连接池。 */
   readonly writePool: Pool;
   /** 唯一表前缀。 */
   readonly prefix: string;
-  /** 释放资源：回滚上下文、删表、关池。 */
+  /** 释放资源：tear down ctx → 删表 → 关池。 */
   readonly dispose: () => Promise<void>;
 }
 
 /**
- * 装配一套隔离的 MySQL 测试环境（唯一表前缀 + schema + 后端 + 协调器）。
+ * 装配一套隔离的 MySQL 测试环境（唯一表前缀 + schema + 后端 + 服务）。
  * @returns 测试句柄。
  */
 export async function setupTestDb(): Promise<TestDbHandle> {
@@ -45,16 +45,18 @@ export async function setupTestDb(): Promise<TestDbHandle> {
   await ensureSchema(writePool, prefix, { autoMigrate: true });
   const backend = new MysqlBackend(writePool, readPool, shared, settings);
   const ctx = new Context();
-  // 协调器写路径依赖 ctx.sessions（SessionStore）；先挂载内存 store。
   await ctx.plugin(SessionStore);
-  const coordinator = new PersistenceCoordinator(ctx, backend, {
-    preparedSessionCacheSize: 5,
-    writeBatchMaxDelayMs: 50,
-  });
+  // 关键：把本次测试的 tablePrefix 一并传给 persistence，使插件使用与 setup 同套表。
+  const persistence = new MysqlSessionPersistence(ctx, { connection: { tablePrefix: prefix } });
+  await persistence[Symbol.for("cordis.init")]?.();
 
   const dispose = async () => {
-    // dsh-session-persistence 0.1.2 的 PersistenceCoordinator 不再暴露公开 dispose，
-    // 其后端析构以 ctx effect 挂载；测试在此显式关池清理即可（coordinator 无待排空写入）。
+    // teardown 顺序：ctx fiber（关闭所有 handle 与 effect）→ 关池 → 删表。
+    try {
+      await ctx.fiber.dispose();
+    } catch {
+      // ignore
+    }
     const names = tableNames(prefix);
     await writePool.query(
       `DROP TABLE IF EXISTS \`${names.events}\`, \`${names.sessions}\`, \`${names.meta}\``,
@@ -66,5 +68,5 @@ export async function setupTestDb(): Promise<TestDbHandle> {
     }
   };
 
-  return { settings, backend, coordinator, ctx, writePool, prefix, dispose };
+  return { settings, backend, persistence, ctx, writePool, prefix, dispose };
 }

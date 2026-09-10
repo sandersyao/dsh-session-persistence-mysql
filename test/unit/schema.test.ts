@@ -69,7 +69,7 @@ describe("DDL 语句", () => {
     expect(ddl).toContain("PRIMARY KEY (version)");
   });
 
-  it("当前 SCHEMA_VERSION 为 1", () => {
-    expect(SCHEMA_VERSION).toBe(1);
+  it("当前 SCHEMA_VERSION 为 2（0.1.5 起，会话头格式从 v0 升到 SESSION_FORMAT_VERSION=3）", () => {
+    expect(SCHEMA_VERSION).toBe(2);
   });
 });

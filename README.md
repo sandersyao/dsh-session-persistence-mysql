@@ -51,9 +51,6 @@ Each variable reads the plugin-exclusive **`SESSION_*` first and falls back to t
 | `SESSION_READ_HOST` / `SESSION_READ_USER` / `SESSION_READ_PASSWORD` | `MYSQL_READ_*` equivalents | (empty) | Read replica for read/write split; empty reuses the write connection (same-store mode). |
 | `SESSION_SSL_REQUIRED` | `MYSQL_SSL_REQUIRED` | `false` | Reserved for TLS enforcement (deferred; may be provided by a cloud provider). |
 | `SESSION_POOL_SIZE` / `SESSION_POOL_QUEUE_LIMIT` | `MYSQL_POOL_*` equivalents | `10` / `0` | Pool sizing. |
-| `SESSION_WRITE_BATCH_DELAY_MS` | `MYSQL_WRITE_BATCH_DELAY_MS` | `200` | Batching window passed to the coordinator. |
-| `SESSION_PREPARED_CACHE_SIZE` | `MYSQL_PREPARED_CACHE_SIZE` | `5` | Unpublished-session LRU size. |
-| `SESSION_PACK_CHUNKS` | `MYSQL_PACK_CHUNKS` | `true` | Fold `assistant/chunk` runs into packed rows. |
 | `SESSION_SCHEMA_AUTO_MIGRATE` | `MYSQL_SCHEMA_AUTO_MIGRATE` | `true` | Auto-migrate schema on startup; `false` only validates. |
 | `SESSION_ENCRYPTION_KEY` | `MYSQL_ENCRYPTION_KEY` | (empty) | Reserved for application-level field encryption (deferred; empty = plaintext). |
 
@@ -95,4 +92,4 @@ The backend adds no prompt or schema. Resume restores stored surface events as m
 - **`list()` is unpaginated and unfiltered** (seam constraint).
 - **Plaintext by default** — session events may contain sensitive content (conversations, tool results, request headers). `ENCRYPTION_KEY` is a reserved extension point; application-level field encryption is deferred. Deployers should consider MySQL native TDE / at-rest encryption.
 - **TLS/transport enforcement deferred** — `MYSQL_SSL_REQUIRED` is reserved; may be provided by a cloud provider.
-- **Pinned to `^0.1.1-rc.2` peers** — official `v0.1.2-alpha.3` compatibility is future work; high test coverage is the safety net.
+- **Pinned to `^0.1.5-rc.x` peers** — aligned with the dsh `0.1.5-rc.x` session-persistence contract; upgrade together with `@deepseek-ai/dsh-session` / `@deepseek-ai/dsh-session-persistence`.

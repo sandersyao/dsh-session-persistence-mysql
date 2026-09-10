@@ -13,29 +13,32 @@ afterEach(async () => {
 describe("安全：SQL 注入与边界（优先）", () => {
   it("恶意会话 id 被当作字面量参数化，不构成注入", async () => {
     handle = await setupTestDb();
-    const { coordinator, backend } = handle;
+    const { persistence, backend } = handle;
     // 注入负载作为会话 id。
     const maliciousId = "sess'; DROP TABLE t_sessions; --";
-    await coordinator.create({
-      version: 0,
+    const writeHandle = await persistence.create({
+      version: 3,
       id: maliciousId,
       createdAt: 1,
       isSeeded: false,
     });
-    await coordinator.append(maliciousId, balancedTurnEvents(0));
+    await writeHandle.append(balancedTurnEvents(0));
+    await writeHandle.flush();
 
-    const loaded = await coordinator.load(maliciousId);
-    expect(loaded.meta.id).toBe(maliciousId);
+    const readHandle = await persistence.open(maliciousId, "read");
+    const loaded = await readHandle.read();
     expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3]);
+    await readHandle.close();
+    await writeHandle.close();
 
     // 表应仍然存在（未被注入语句删除）。
-    const headers = await backend.list();
-    expect(headers.map((h) => h.id)).toContain(maliciousId);
+    const snaps = await backend.listSnapshots();
+    expect(snaps.map((s) => s.header.id)).toContain(maliciousId);
   });
 
   it("事件负载中的 SQL 片段被原样存储，不执行", async () => {
     handle = await setupTestDb();
-    const { coordinator } = handle;
+    const { persistence } = handle;
     const id = "sess-payload-sql";
     const events = balancedTurnEvents(0);
     // 把一条事件的 data 换成含 SQL 的对象（JSON 可序列化）。
@@ -50,24 +53,27 @@ describe("安全：SQL 注入与边界（优先）", () => {
       events[2],
       events[3],
     ];
-    await coordinator.create({ version: 0, id, createdAt: 1, isSeeded: false });
-    await coordinator.append(id, tampered as never);
+    const writeHandle = await persistence.create({ version: 3, id, createdAt: 1, isSeeded: false });
+    await writeHandle.append(tampered as never);
+    await writeHandle.flush();
 
-    const loaded = await coordinator.load(id);
+    const readHandle = await persistence.open(id, "read");
+    const loaded = await readHandle.read();
     const first = loaded.events[0];
     expect(first && "data" in first).toBe(true);
     expect((first as { data: { note: string } }).data.note).toContain("DROP TABLE");
+    await readHandle.close();
+    await writeHandle.close();
   });
 
   it("表前缀非法时拒绝创建后端（标识符注入防护）", async () => {
     handle = await setupTestDb();
-    const { settings, writePool } = handle;
+    const { writePool } = handle;
     // 直接以非法前缀调用 ensureSchema 应抛错。
     const { ensureSchema } = await import("../../src/schema.js");
     await expect(ensureSchema(writePool, "bad; DROP", { autoMigrate: true })).rejects.toThrow(
       /表前缀非法/,
     );
-    void settings;
   });
 
   it("schema 版本回退（已应用高于期望）拒绝启动", async () => {
@@ -99,13 +105,13 @@ describe("安全：SQL 注入与边界（优先）", () => {
     const names = tableNames(prefix);
     // 直接写入一个非 JSON 的 payload 行，模拟存储损坏。
     await writePool.query(
-      `INSERT INTO \`${names.sessions}\` (session_id, version, created_at, delegation_depth) VALUES (?, 0, 1, 0)`,
+      `INSERT INTO \`${names.sessions}\` (session_id, version, created_at, delegation_depth) VALUES (?, 3, 1, 0)`,
       ["sess-corrupt"],
     );
     await writePool.query(
       `INSERT INTO \`${names.events}\` (session_id, seq, row_type, payload) VALUES (?, ?, NULL, ?)`,
       ["sess-corrupt", 0, "{not-valid-json"],
     );
-    await expect(backend.loadStored("sess-corrupt" as never)).rejects.toThrow();
+    await expect(backend.readStoredLog("sess-corrupt" as never)).rejects.toThrow();
   });
 });

@@ -1,36 +1,39 @@
+import type { SessionHeader } from "@deepseek-ai/dsh-session";
 import { describe, expect, it } from "vitest";
 
 import { decodeStoredRows, encodeStorageRows } from "../../src/mysql-codec.js";
 import { balancedTurnEvents, chunkEvent, structuralEvent } from "../helpers/events.js";
 
-describe("encodeStorageRows / decodeStoredRows", () => {
-  it("裸事件（关闭折叠）往返无损", () => {
+/**
+ * 0.1.5 codec：encodeStorageRows 透传事件（materializeAppendBatch 不折叠）；
+ * chunk 折叠由 dsh-session 的 sessionFormatCatalog.encodeCurrentEvent 承担。
+ * decodeStoredRows 由 handle 层内部的 validateStoredEvents 兜底，因此本单元
+ * 测试仅覆盖 encodeStorageRows 的形状契约：每条事件 → 一行 rowType=null。
+ */
+describe("encodeStorageRows（0.1.5 透传语义）", () => {
+  it("结构事件 → 每条一行 rowType=null", () => {
     const events = balancedTurnEvents(0);
-    const rows = encodeStorageRows(events, false);
+    const rows = encodeStorageRows(events);
     expect(rows).toHaveLength(4);
-    expect(rows[0]?.rowType).toBeNull();
-    const decoded = decodeStoredRows(rows);
-    expect(decoded).toEqual(events);
+    expect(rows.every((r) => r.rowType === null)).toBe(true);
   });
 
-  it("结构事件开启折叠时仍逐条保存（不折叠非 chunk）", () => {
-    const events = balancedTurnEvents(0);
-    const rows = encodeStorageRows(events, true);
-    expect(rows).toHaveLength(4);
-    expect(decodeStoredRows(rows)).toEqual(events);
-  });
-
-  it("连续 chunk 开启折叠后行数显著减少且往返无损", () => {
+  it("chunk 事件同样每条一行 rowType=null（折叠由 catalog 承担）", () => {
     const chunks = [0, 1, 2, 3, 4].map((i) => chunkEvent(i, `t${i}`));
-    const rows = encodeStorageRows(chunks, true);
-    // 5 条同 block text-delta 应折叠为 1 行。
-    expect(rows.length).toBeLessThan(chunks.length);
-    const decoded = decodeStoredRows(rows);
-    expect(decoded).toHaveLength(5);
-    expect(decoded).toEqual(chunks);
+    const rows = encodeStorageRows(chunks);
+    expect(rows).toHaveLength(chunks.length);
+    expect(rows.every((r) => r.rowType === null)).toBe(true);
   });
 
-  it("混合事件（chunk + 结构）往返无损", () => {
+  it("decodeStoredRows 对非事件 payload loud-fail", () => {
+    const meta = { version: 3, id: "s", createdAt: 1, isSeeded: false } as unknown as SessionHeader;
+    expect(() => decodeStoredRows(meta, [{ payload: "123" }])).toThrow(/not a SessionEvent/);
+    expect(() => decodeStoredRows(meta, [{ payload: JSON.stringify({ seq: 0 }) }])).toThrow(
+      /not a SessionEvent/,
+    );
+  });
+
+  it("混合事件（chunk + 结构）每条独立一行", () => {
     const events = [
       structuralEvent("turn/start", 0, { turn: 1 }),
       chunkEvent(1, "a"),
@@ -38,7 +41,7 @@ describe("encodeStorageRows / decodeStoredRows", () => {
       chunkEvent(3, "c"),
       structuralEvent("turn/end", 4, { turn: 1, reason: { kind: "completed" } }),
     ];
-    const rows = encodeStorageRows(events, true);
-    expect(decodeStoredRows(rows)).toEqual(events);
+    const rows = encodeStorageRows(events);
+    expect(rows).toHaveLength(5);
   });
 });

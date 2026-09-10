@@ -43,18 +43,6 @@ export interface PoolSettings {
 }
 
 /**
- * 持久化语义设置。
- */
-export interface PersistenceSettings {
-  /** 空闲队列收到写入后，固定 batching 等待窗口（毫秒）。 */
-  readonly writeBatchMaxDelayMs: number;
-  /** 冷加载后保留供复用的未发布会话数上限。 */
-  readonly preparedSessionCacheSize: number;
-  /** 是否启用 chunk run 折叠写入。 */
-  readonly packChunks: boolean;
-}
-
-/**
  * 安全设置。
  */
 export interface SecuritySettings {
@@ -74,8 +62,6 @@ export interface MysqlSettings {
   readonly readConnection: ConnectionSettings;
   /** 连接池设置。 */
   readonly pool: PoolSettings;
-  /** 持久化语义设置。 */
-  readonly persistence: PersistenceSettings;
   /** 安全设置。 */
   readonly security: SecuritySettings;
 }
@@ -207,21 +193,6 @@ export function loadSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): Mysql
     ),
   };
 
-  const persistence: PersistenceSettings = {
-    writeBatchMaxDelayMs: intFromEnv(
-      fromEnv(env, "WRITE_BATCH_DELAY_MS"),
-      200,
-      "SESSION_WRITE_BATCH_DELAY_MS/MYSQL_WRITE_BATCH_DELAY_MS",
-    ),
-    preparedSessionCacheSize: intFromEnv(
-      fromEnv(env, "PREPARED_CACHE_SIZE"),
-      5,
-      "SESSION_PREPARED_CACHE_SIZE/MYSQL_PREPARED_CACHE_SIZE",
-    ),
-    // 布尔默认开：仅当任一来源显式 "false" 时关闭（与 storage 的 autoMigrate 语义一致）。
-    packChunks: env.SESSION_PACK_CHUNKS !== "false" && env.MYSQL_PACK_CHUNKS !== "false",
-  };
-
   // 加密 key 可选：独享 SESSION_ENCRYPTION_KEY > 共享 MYSQL_ENCRYPTION_KEY > 旧版裸 ENCRYPTION_KEY。
   const encryptionKey = fromEnv(env, "ENCRYPTION_KEY") ?? env.ENCRYPTION_KEY;
   const security: SecuritySettings = {
@@ -230,7 +201,7 @@ export function loadSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): Mysql
       env.SESSION_SCHEMA_AUTO_MIGRATE !== "false" && env.MYSQL_SCHEMA_AUTO_MIGRATE !== "false",
   };
 
-  return { connection, readConnection, pool, persistence, security };
+  return { connection, readConnection, pool, security };
 }
 
 /**
@@ -261,8 +232,6 @@ export interface SettingsOverrides {
   readonly readConnection?: ConnectionOverrides;
   /** 池设置覆盖。 */
   readonly pool?: Partial<PoolSettings>;
-  /** 持久化语义覆盖。 */
-  readonly persistence?: Partial<PersistenceSettings>;
   /** 安全设置覆盖。 */
   readonly security?: Partial<SecuritySettings>;
 }
@@ -280,7 +249,6 @@ export function mergeSettings(
   const c = overrides?.connection;
   const rc = overrides?.readConnection;
   const p = overrides?.pool;
-  const ps = overrides?.persistence;
   const sc = overrides?.security;
 
   const connection: ConnectionSettings = {
@@ -318,12 +286,6 @@ export function mergeSettings(
       idleTimeout: p?.idleTimeout ?? base.pool.idleTimeout,
       acquireTimeout: p?.acquireTimeout ?? base.pool.acquireTimeout,
       queueLimit: p?.queueLimit ?? base.pool.queueLimit,
-    },
-    persistence: {
-      writeBatchMaxDelayMs: ps?.writeBatchMaxDelayMs ?? base.persistence.writeBatchMaxDelayMs,
-      preparedSessionCacheSize:
-        ps?.preparedSessionCacheSize ?? base.persistence.preparedSessionCacheSize,
-      packChunks: ps?.packChunks ?? base.persistence.packChunks,
     },
     security: {
       encryptionKey: sc?.encryptionKey ?? base.security.encryptionKey,

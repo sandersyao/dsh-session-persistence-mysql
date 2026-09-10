@@ -15,13 +15,11 @@ function validEnv(): Record<string, string> {
 }
 
 describe("loadSettingsFromEnv", () => {
-  it("解析完整设置，缺省池/持久化参数落到默认值", () => {
+  it("解析完整设置，缺省池参数落到默认值", () => {
     const settings = loadSettingsFromEnv(validEnv());
     expect(settings.connection.host).toBe("127.0.0.1");
     expect(settings.connection.port).toBe(3306);
     expect(settings.connection.tablePrefix).toBe("dsh_");
-    expect(settings.persistence.writeBatchMaxDelayMs).toBe(200);
-    expect(settings.persistence.packChunks).toBe(true);
     expect(settings.pool.poolSize).toBe(10);
     expect(settings.security.schemaAutoMigrate).toBe(true);
   });
@@ -36,6 +34,24 @@ describe("loadSettingsFromEnv", () => {
     const env = validEnv();
     delete env.MYSQL_PASSWORD;
     expect(() => loadSettingsFromEnv(env)).toThrow(/MYSQL_PASSWORD/);
+  });
+
+  it("缺库场景：缺 MYSQL_USER 抛错", () => {
+    const env = validEnv();
+    delete env.MYSQL_USER;
+    expect(() => loadSettingsFromEnv(env)).toThrow(/MYSQL_USER/);
+  });
+
+  it("缺库场景：缺 MYSQL_DATABASE 抛错", () => {
+    const env = validEnv();
+    delete env.MYSQL_DATABASE;
+    expect(() => loadSettingsFromEnv(env)).toThrow(/MYSQL_DATABASE/);
+  });
+
+  it("缺库场景：缺 MYSQL_TABLE_PREFIX 抛错", () => {
+    const env = validEnv();
+    delete env.MYSQL_TABLE_PREFIX;
+    expect(() => loadSettingsFromEnv(env)).toThrow(/MYSQL_TABLE_PREFIX/);
   });
 
   it("非法端口抛错", () => {
@@ -59,12 +75,6 @@ describe("loadSettingsFromEnv", () => {
     expect(settings.readConnection.user).toBe("readuser");
     expect(settings.readConnection).not.toBe(settings.connection);
   });
-
-  it("packChunks=false 可关闭折叠", () => {
-    const env = validEnv();
-    env.MYSQL_PACK_CHUNKS = "false";
-    expect(loadSettingsFromEnv(env).persistence.packChunks).toBe(false);
-  });
 });
 
 describe("loadSettingsFromEnv：独享 SESSION_* 优先于共享 MYSQL_*", () => {
@@ -75,14 +85,12 @@ describe("loadSettingsFromEnv：独享 SESSION_* 优先于共享 MYSQL_*", () =>
       SESSION_TABLE_PREFIX: "sess_",
       SESSION_PORT: "4406",
       SESSION_POOL_SIZE: "22",
-      SESSION_PACK_CHUNKS: "false",
     };
     const settings = loadSettingsFromEnv(env);
     expect(settings.connection.database).toBe("dsh_session_excl");
     expect(settings.connection.tablePrefix).toBe("sess_");
     expect(settings.connection.port).toBe(4406);
     expect(settings.pool.poolSize).toBe(22);
-    expect(settings.persistence.packChunks).toBe(false);
     // 未设 SESSION_HOST → 回退共享 MYSQL_HOST。
     expect(settings.connection.host).toBe("127.0.0.1");
   });
