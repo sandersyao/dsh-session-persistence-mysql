@@ -8,6 +8,7 @@
 - peer/dev 升至 `@deepseek-ai/dsh-session` / `dsh-session-persistence` `^0.1.5-rc.1`；其他 `@deepseek-ai/dsh-*` 也对齐到 `0.1.5-rc.1`。
 - 源码无需改动：`SESSION_FORMAT_VERSION=3`、`SessionPersistence` 抽象方法签名、`SessionHandle` 接口、storage contract 与 alpha.2 完全一致。
 - 门禁全绿：typecheck 0 错误、build、test **48/48** 通过、smoke PASS。
+- 移除无实际检查的 `invariants` 伴生入口（`src/invariant.ts`、`./invariant` 导出、`tsup` entry）与 `@deepseek-ai/dsh-invariants` 依赖，对齐官方 `dsh-session-persistence-jsonl`（不发布该伴生入口）。
 
 ## 0.1.5-alpha.1 (2026-09-10) —— 适配 dsh 0.1.5-alpha.x 契约
 

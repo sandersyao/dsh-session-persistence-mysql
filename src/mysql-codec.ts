@@ -1,8 +1,8 @@
-import { type SessionEvent } from "@deepseek-ai/dsh-session";
+import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import {
   materializeAppendBatch,
-  validateStoredEvents,
   type SessionHeader,
+  validateStoredEvents,
 } from "@deepseek-ai/dsh-session-persistence";
 
 /**

@@ -52,9 +52,6 @@ await ctx.plugin(MysqlSessionPersistence, {
 | `SESSION_READ_HOST` / `SESSION_READ_USER` / `SESSION_READ_PASSWORD` | `MYSQL_READ_*` 同名 | （空） | 读写分离读库；留空复用写库连接（同库模式）。 |
 | `SESSION_SSL_REQUIRED` | `MYSQL_SSL_REQUIRED` | `false` | 预留 TLS 强制位（暂缓，届时可能由云服务商提供）。 |
 | `SESSION_POOL_SIZE` / `SESSION_POOL_QUEUE_LIMIT` | `MYSQL_POOL_*` 同名 | `10` / `0` | 连接池大小。 |
-| `SESSION_WRITE_BATCH_DELAY_MS` | `MYSQL_WRITE_BATCH_DELAY_MS` | `200` | 传给协调器的 batching 窗口。 |
-| `SESSION_PREPARED_CACHE_SIZE` | `MYSQL_PREPARED_CACHE_SIZE` | `5` | 未发布会话 LRU 容量。 |
-| `SESSION_PACK_CHUNKS` | `MYSQL_PACK_CHUNKS` | `true` | 折叠 `assistant/chunk` run 为 packed 行。 |
 | `SESSION_SCHEMA_AUTO_MIGRATE` | `MYSQL_SCHEMA_AUTO_MIGRATE` | `true` | 启动自动迁移 schema；`false` 仅校验。 |
 | `SESSION_ENCRYPTION_KEY` | `MYSQL_ENCRYPTION_KEY` | （空） | 预留应用层字段加密 key（暂缓；空 = 明文）。 |
 

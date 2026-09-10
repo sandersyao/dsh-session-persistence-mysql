@@ -27,11 +27,7 @@ describe("性能：写入吞吐与并发安全（宽松回归门禁）", () => {
     );
     const start = performance.now();
     for (let b = 0; b < BATCHES; b++) {
-      await Promise.all(
-        handles.map((h, s) =>
-          h.append(balancedTurnEvents(b * 4, b + 1)),
-        ),
-      );
+      await Promise.all(handles.map((h) => h.append(balancedTurnEvents(b * 4, b + 1))));
     }
     for (const h of handles) await h.flush();
     const elapsed = performance.now() - start;

@@ -51,9 +51,6 @@ Each variable reads the plugin-exclusive **`SESSION_*` first and falls back to t
 | `SESSION_READ_HOST` / `SESSION_READ_USER` / `SESSION_READ_PASSWORD` | `MYSQL_READ_*` equivalents | (empty) | Read replica for read/write split; empty reuses the write connection (same-store mode). |
 | `SESSION_SSL_REQUIRED` | `MYSQL_SSL_REQUIRED` | `false` | Reserved for TLS enforcement (deferred; may be provided by a cloud provider). |
 | `SESSION_POOL_SIZE` / `SESSION_POOL_QUEUE_LIMIT` | `MYSQL_POOL_*` equivalents | `10` / `0` | Pool sizing. |
-| `SESSION_WRITE_BATCH_DELAY_MS` | `MYSQL_WRITE_BATCH_DELAY_MS` | `200` | Batching window passed to the coordinator. |
-| `SESSION_PREPARED_CACHE_SIZE` | `MYSQL_PREPARED_CACHE_SIZE` | `5` | Unpublished-session LRU size. |
-| `SESSION_PACK_CHUNKS` | `MYSQL_PACK_CHUNKS` | `true` | Fold `assistant/chunk` runs into packed rows. |
 | `SESSION_SCHEMA_AUTO_MIGRATE` | `MYSQL_SCHEMA_AUTO_MIGRATE` | `true` | Auto-migrate schema on startup; `false` only validates. |
 | `SESSION_ENCRYPTION_KEY` | `MYSQL_ENCRYPTION_KEY` | (empty) | Reserved for application-level field encryption (deferred; empty = plaintext). |
 

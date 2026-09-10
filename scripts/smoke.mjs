@@ -4,7 +4,7 @@ import { config as loadDotenv } from "dotenv";
 import { Context } from "@deepseek-ai/cordis";
 import { SessionStore, SessionId } from "@deepseek-ai/dsh-session";
 
-import MysqlSessionPersistence from "/Users/elvin.li/Documents/dsh_workspace/dsh-session-persistence-mysql/lib/index.js";
+import MysqlSessionPersistence from "../lib/index.js";
 
 const LOG_PATH = "/tmp/smoke.log";
 fs.writeFileSync(LOG_PATH, "");

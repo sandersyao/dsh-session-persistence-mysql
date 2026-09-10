@@ -1,28 +1,28 @@
 import { type Context, Service } from "@deepseek-ai/cordis";
 import {
-  SessionLogOffset,
-  type SessionId,
-  type SessionHeader,
   SESSION_FORMAT_VERSION,
+  type SessionHeader,
+  type SessionId,
+  SessionLogOffset,
 } from "@deepseek-ai/dsh-session";
 import {
-  SessionAlreadyExistsError,
-  SessionPersistence,
-  SessionPersistenceNotFoundError,
   materializeAppendBatch,
   materializeCreateHeader,
   type SessionAccess,
+  SessionAlreadyExistsError,
   type SessionHandle,
   type SessionHandleAppendOptions,
   type SessionHandleFlushOptions,
   type SessionHandleReadOptions,
   type SessionHandleReadResult,
+  SessionPersistence,
   type SessionPersistenceCreateOptions,
   type SessionPersistenceListOptions,
+  SessionPersistenceNotFoundError,
   type SessionPersistenceOpenOptions,
+  type SessionPersistenceRevision,
   type SessionPersistenceSnapshot,
   type SessionPersistenceStatOptions,
-  type SessionPersistenceRevision,
 } from "@deepseek-ai/dsh-session-persistence";
 import z from "@deepseek-ai/schemastery";
 
@@ -63,9 +63,6 @@ export const MysqlConfig = z.object({
     idleTimeout: z.number(),
     acquireTimeout: z.number(),
     queueLimit: z.number(),
-  }),
-  persistence: z.object({
-    packChunks: z.boolean(),
   }),
   security: z.object({
     encryptionKey: z.string(),
@@ -168,7 +165,10 @@ export class MysqlSessionPersistence extends SessionPersistence {
     }
     options?.signal?.throwIfAborted();
     // 已存在性检查（同一后端内存 + 数据库合并判断）。
-    if (this.tracker.hasPending(snapshot.id) || (await this.backend.hasSession(snapshot.id, options?.signal))) {
+    if (
+      this.tracker.hasPending(snapshot.id) ||
+      (await this.backend.hasSession(snapshot.id, options?.signal))
+    ) {
       throw new SessionAlreadyExistsError(snapshot.id);
     }
     options?.signal?.throwIfAborted();
@@ -330,9 +330,9 @@ export type {
   SessionPersistenceCreateOptions,
   SessionPersistenceListOptions,
   SessionPersistenceOpenOptions,
+  SessionPersistenceRevision,
   SessionPersistenceSnapshot,
   SessionPersistenceStatOptions,
-  SessionPersistenceRevision,
 };
 // Keep `materialize*` symbols re-exportable to ease downstream consumption.
 export { materializeAppendBatch, materializeCreateHeader };

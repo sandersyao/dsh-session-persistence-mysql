@@ -43,18 +43,6 @@ export interface PoolSettings {
 }
 
 /**
- * 持久化语义设置。
- *
- * 0.1.5 起 batching 策略下沉到 handle 层（{@link MysqlSessionHandle} 的
- * `LIVE_WRITE_BATCH_MAX_DELAY_MS` 内部常量，与 JSONL 后端对齐）。插件
- * 只保留与存储介质相关的 `packChunks` 开关。
- */
-export interface PersistenceSettings {
-  /** 是否启用 chunk run 折叠写入。 */
-  readonly packChunks: boolean;
-}
-
-/**
  * 安全设置。
  */
 export interface SecuritySettings {
@@ -74,8 +62,6 @@ export interface MysqlSettings {
   readonly readConnection: ConnectionSettings;
   /** 连接池设置。 */
   readonly pool: PoolSettings;
-  /** 持久化语义设置。 */
-  readonly persistence: PersistenceSettings;
   /** 安全设置。 */
   readonly security: SecuritySettings;
 }
@@ -106,9 +92,6 @@ function intFromEnv(value: string | undefined, fallback: number, label: string):
  * 与 dsh-storage-mysql 的 `STORAGE_*`、dsh-credentials-mysql 的 `CREDENTIALS_*`
  * 同一模式：多 MySQL 插件共用一套 `MYSQL_*` 部署，又各自能被独享前缀独立配置
  * （指向专属库 / 专属表前缀 / 专属凭据），同库共存。
- *
- * 0.1.5 起 `WRITE_BATCH_DELAY_MS` 与 `PREPARED_CACHE_SIZE` 已下沉为 handle
- * 层内部常量，不再从环境变量读取；保留它们的回退解析仅为历史兼容（值会被忽略）。
  * @param env - 环境变量快照。
  * @param key - 配置段名（如 `HOST`、`READ_HOST`、`POOL_SIZE`）。
  * @returns 独享值或共享回退值，均可能为 undefined。
@@ -210,11 +193,6 @@ export function loadSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): Mysql
     ),
   };
 
-  const persistence: PersistenceSettings = {
-    // 布尔默认开：仅当任一来源显式 "false" 时关闭（与 storage 的 autoMigrate 语义一致）。
-    packChunks: env.SESSION_PACK_CHUNKS !== "false" && env.MYSQL_PACK_CHUNKS !== "false",
-  };
-
   // 加密 key 可选：独享 SESSION_ENCRYPTION_KEY > 共享 MYSQL_ENCRYPTION_KEY > 旧版裸 ENCRYPTION_KEY。
   const encryptionKey = fromEnv(env, "ENCRYPTION_KEY") ?? env.ENCRYPTION_KEY;
   const security: SecuritySettings = {
@@ -223,7 +201,7 @@ export function loadSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): Mysql
       env.SESSION_SCHEMA_AUTO_MIGRATE !== "false" && env.MYSQL_SCHEMA_AUTO_MIGRATE !== "false",
   };
 
-  return { connection, readConnection, pool, persistence, security };
+  return { connection, readConnection, pool, security };
 }
 
 /**
@@ -254,8 +232,6 @@ export interface SettingsOverrides {
   readonly readConnection?: ConnectionOverrides;
   /** 池设置覆盖。 */
   readonly pool?: Partial<PoolSettings>;
-  /** 持久化语义覆盖。 */
-  readonly persistence?: Partial<PersistenceSettings>;
   /** 安全设置覆盖。 */
   readonly security?: Partial<SecuritySettings>;
 }
@@ -273,7 +249,6 @@ export function mergeSettings(
   const c = overrides?.connection;
   const rc = overrides?.readConnection;
   const p = overrides?.pool;
-  const ps = overrides?.persistence;
   const sc = overrides?.security;
 
   const connection: ConnectionSettings = {
@@ -311,9 +286,6 @@ export function mergeSettings(
       idleTimeout: p?.idleTimeout ?? base.pool.idleTimeout,
       acquireTimeout: p?.acquireTimeout ?? base.pool.acquireTimeout,
       queueLimit: p?.queueLimit ?? base.pool.queueLimit,
-    },
-    persistence: {
-      packChunks: ps?.packChunks ?? base.persistence.packChunks,
     },
     security: {
       encryptionKey: sc?.encryptionKey ?? base.security.encryptionKey,

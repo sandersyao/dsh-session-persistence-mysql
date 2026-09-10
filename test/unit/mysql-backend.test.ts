@@ -37,7 +37,6 @@ function minimalSettings(tablePrefix = "t_"): MysqlSettings {
       sslRequired: false,
     },
     pool: { poolSize: 1, minIdle: 0, idleTimeout: 1000, acquireTimeout: 1000, queueLimit: 0 },
-    persistence: { packChunks: false },
     security: { encryptionKey: undefined, schemaAutoMigrate: true },
   };
 }

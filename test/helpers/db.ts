@@ -3,8 +3,8 @@ import SessionStore from "@deepseek-ai/dsh-session";
 import type { Pool } from "mysql2/promise";
 
 import { loadSettingsFromEnv, type MysqlSettings, mergeSettings } from "../../src/config.js";
-import { MysqlBackend } from "../../src/mysql-backend.js";
 import { MysqlSessionPersistence } from "../../src/index.js";
+import { MysqlBackend } from "../../src/mysql-backend.js";
 import { createReadPool, createWritePool } from "../../src/pool.js";
 import { ensureSchema, tableNames } from "../../src/schema.js";
 

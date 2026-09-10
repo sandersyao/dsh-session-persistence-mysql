@@ -11,11 +11,6 @@ let prefix: string | undefined;
 
 afterEach(async () => {
   if (ctx && prefix) {
-    const { writePool, tableNames } = await import("../../src/pool.js").then(
-      (m) => ({ writePool: undefined, tableNames: undefined }),
-    );
-    void writePool;
-    void tableNames;
     await ctx.fiber.dispose().catch(() => {});
     ctx = undefined;
     prefix = undefined;

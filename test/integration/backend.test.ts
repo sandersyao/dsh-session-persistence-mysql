@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MysqlBackend } from "../../src/mysql-backend.js";
 import { createReadPool, createWritePool } from "../../src/pool.js";
 import { ensureSchema } from "../../src/schema.js";
-import { balancedTurnEvents } from "../helpers/events.js";
 import { setupTestDb, type TestDbHandle } from "../helpers/db.js";
+import { balancedTurnEvents } from "../helpers/events.js";
 
 /** 被测试的装配句柄。 */
 let handle: TestDbHandle | undefined;

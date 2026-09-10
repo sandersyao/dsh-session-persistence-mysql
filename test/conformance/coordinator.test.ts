@@ -1,8 +1,7 @@
 import type { SessionHeader } from "@deepseek-ai/dsh-session";
 import { afterEach, describe, expect, it } from "vitest";
-
-import { balancedTurnEvents, chunkEvent, structuralEvent } from "../helpers/events.js";
 import { setupTestDb, type TestDbHandle } from "../helpers/db.js";
+import { balancedTurnEvents, chunkEvent, structuralEvent } from "../helpers/events.js";
 
 /** 被测试的装配句柄。 */
 let handle: TestDbHandle | undefined;

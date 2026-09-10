@@ -143,10 +143,10 @@ export async function applyMigrations(
 ): Promise<void> {
   const names = tableNames(prefix);
   if (fromVersion < 2) {
-    await pool.query(
-      `UPDATE \`${names.sessions}\` SET version = ? WHERE version < ?`,
-      [SESSION_FORMAT_VERSION, SESSION_FORMAT_VERSION],
-    );
+    await pool.query(`UPDATE \`${names.sessions}\` SET version = ? WHERE version < ?`, [
+      SESSION_FORMAT_VERSION,
+      SESSION_FORMAT_VERSION,
+    ]);
   }
 }
 

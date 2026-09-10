@@ -7,18 +7,17 @@ import type {
   SessionSeedEventState,
 } from "@deepseek-ai/dsh-session";
 import {
+  SessionPersistenceRevision as brandRevision,
   type SessionAccess,
+  SessionAlreadyExistsError,
+  SessionAlreadyOwnedError,
   type SessionHandle,
   type SessionHandleAppendOptions,
+  SessionHandleClosedError,
   type SessionHandleFlushOptions,
   type SessionHandleReadOptions,
   type SessionHandleReadResult,
   type SessionPersistenceRevision,
-  SessionPersistenceRevision as brandRevision,
-  SessionAlreadyExistsError,
-  SessionAlreadyOwnedError,
-  SessionHandleClosedError,
-  SessionPersistenceNotFoundError,
   SessionReadOnlyError,
 } from "@deepseek-ai/dsh-session-persistence";
 
@@ -36,12 +35,6 @@ export interface StorageHandleState {
   /** fork 继承前缀长度（create 时固定，open write 时从存储读出）。 */
   inheritedEventCount: SessionLogOffset;
 }
-
-/**
- * 单个写者最近一次 published 的 live event seq；handle.read 用此保证
- * monotonic view——单读不会回退到比之前 observeLength 更早的尾部。
- */
-const OBSERVED_LENGTH_INIT = 0;
 
 /** Live event 批量写入的默认最大延迟（ms）。 */
 export const LIVE_WRITE_BATCH_MAX_DELAY_MS = 200;
@@ -212,7 +205,10 @@ export class MysqlSessionHandle implements SessionHandle {
    * @param events - 连续事件（seq 续接 cursor）。
    * @param _options - 取消选项（MySQL 写路径短，无需内部可中断）。
    */
-  async append(events: readonly SessionEvent[], _options?: SessionHandleAppendOptions): Promise<void> {
+  async append(
+    events: readonly SessionEvent[],
+    _options?: SessionHandleAppendOptions,
+  ): Promise<void> {
     this.assertOpen("append");
     return this.runMutation("append", async () => {
       await this.persistContiguous(events);
@@ -244,7 +240,7 @@ export class MysqlSessionHandle implements SessionHandle {
    */
   close(): Promise<void> {
     if (this.closing !== undefined) return this.closing;
-    return (this.closing = (async () => {
+    const closing = (async () => {
       // 先清掉计时器（避免 close 期间还在排新的 drain）。
       if (this.batchTimer !== undefined) {
         clearTimeout(this.batchTimer);
@@ -254,7 +250,9 @@ export class MysqlSessionHandle implements SessionHandle {
       await this.drainLive();
       await this.chain;
       this.tracker.release(this, this.state.materialized);
-    })());
+    })();
+    this.closing = closing;
+    return closing;
   }
 
   /** `await using` 支持：等价于 close。 */
@@ -281,9 +279,12 @@ export class MysqlSessionHandle implements SessionHandle {
    * 把当前 buffered 一并写入。失败保留 buffered 以便后续 flush 重试。
    */
   drainLive(): Promise<void> {
-    return (this.draining ??= this.drainBuffered().finally(() => {
+    if (this.draining !== undefined) return this.draining;
+    const draining = this.drainBuffered().finally(() => {
       this.draining = undefined;
-    }));
+    });
+    this.draining = draining;
+    return draining;
   }
 
   /**
@@ -299,16 +300,18 @@ export class MysqlSessionHandle implements SessionHandle {
    * @param events - 连续事件。
    */
   private async persistContiguous(events: readonly SessionEvent[]): Promise<void> {
-    if (events.length === 0) return;
-    if (events[0]!.seq !== this.state.cursor) {
+    const first = events[0];
+    if (first === undefined) return;
+    if (first.seq !== this.state.cursor) {
       throw new Error(
-        `append seq mismatch for "${this.id}": expected ${this.state.cursor} at index 0, got ${events[0]!.seq}`,
+        `append seq mismatch for "${this.id}": expected ${this.state.cursor} at index 0, got ${first.seq}`,
       );
     }
     for (let i = 1; i < events.length; i += 1) {
-      if (events[i]!.seq !== this.state.cursor + i) {
+      const event = events[i];
+      if (event === undefined || event.seq !== this.state.cursor + i) {
         throw new Error(
-          `append seq mismatch for "${this.id}": expected ${this.state.cursor + i} at index ${i}, got ${events[i]!.seq}`,
+          `append seq mismatch for "${this.id}": expected ${this.state.cursor + i} at index ${i}, got ${event?.seq}`,
         );
       }
     }
@@ -565,7 +568,14 @@ export function createMysqlSessionHandle(
   access: SessionAccess,
   state: StorageHandleState,
 ): MysqlSessionHandle {
-  return new MysqlSessionHandle(backend as unknown as MysqlHandleStorage, tracker, id, header, access, state);
+  return new MysqlSessionHandle(
+    backend as unknown as MysqlHandleStorage,
+    tracker,
+    id,
+    header,
+    access,
+    state,
+  );
 }
 
 /** 防止 read-only sentinel 被外部 import 时类型悬空。 */

@@ -14,7 +14,6 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "html", "lcov"],
       include: ["src/**/*.ts"],
-      exclude: ["src/invariant.ts"],
       thresholds: {
         lines: 90,
         statements: 90,

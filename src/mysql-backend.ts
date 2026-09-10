@@ -1,21 +1,20 @@
 import {
-  SessionLogOffset,
+  SESSION_FORMAT_VERSION,
   type SessionEvent,
   type SessionHeader,
   type SessionId,
-  SESSION_FORMAT_VERSION,
+  SessionLogOffset,
 } from "@deepseek-ai/dsh-session";
 import {
-  SessionAlreadyExistsError,
-  SessionHandleClosedError,
-  SessionPersistenceNotFoundError,
-  SessionReadOnlyError,
   assertStoredId,
   assertVersion,
-  type SessionHandleReadResult,
-  type SessionLocation,
-  type SessionPersistenceRevision,
   SessionPersistenceRevision as brandRevision,
+  SessionAlreadyExistsError,
+  SessionHandleClosedError,
+  type SessionLocation,
+  SessionPersistenceNotFoundError,
+  type SessionPersistenceRevision,
+  SessionReadOnlyError,
 } from "@deepseek-ai/dsh-session-persistence";
 import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 
@@ -81,8 +80,6 @@ export class MysqlBackend {
   private readonly names: TableNames;
   /** revision 来源限定前缀。 */
   private readonly revisionPrefix: string;
-  /** 是否启用 chunk run 折叠写入（0.1.5 起保留配置但不再使用）。 */
-  private readonly packChunks: boolean;
 
   /**
    * 构造 MySQL 后端。
@@ -97,7 +94,6 @@ export class MysqlBackend {
     this.sharedPool = sharedPool;
     this.names = tableNames(settings.connection.tablePrefix);
     this.revisionPrefix = `${settings.connection.database}/${settings.connection.tablePrefix}:v${SCHEMA_VERSION}`;
-    this.packChunks = settings.persistence.packChunks;
   }
 
   /**
@@ -128,23 +124,6 @@ export class MysqlBackend {
       ...(row.origin !== null ? { origin: row.origin as "subagent" } : {}),
       ...(row.delegation_depth !== 0 ? { delegationDepth: row.delegation_depth } : {}),
       ...(row.agent_preset !== null ? { agentPreset: row.agent_preset } : {}),
-    };
-  }
-
-  /**
-   * 从会话头行还原 storage 元数据（header + inheritedEventCount）。
-   * @param row - sessions 表行。
-   * @returns 重建结果（不含 events）。
-   */
-  private metadataFromRow(row: SessionRow): {
-    meta: SessionHeader;
-    inheritedEventCount: SessionLogOffset;
-    logRev: number;
-  } {
-    return {
-      meta: this.headerFromRow(row),
-      inheritedEventCount: SessionLogOffset(row.seed_length ?? 0),
-      logRev: row.log_rev,
     };
   }
 
@@ -405,10 +384,7 @@ export class MysqlBackend {
    * @param header - 会话头。
    * @param inheritedEventCount - fork 继承前缀长度。
    */
-  async persistHeader(
-    header: SessionHeader,
-    inheritedEventCount: SessionLogOffset,
-  ): Promise<void> {
+  async persistHeader(header: SessionHeader, inheritedEventCount: SessionLogOffset): Promise<void> {
     const conn = await this.writePool.getConnection();
     try {
       await conn.beginTransaction();
@@ -470,5 +446,8 @@ export class MysqlBackend {
   }
 
   /** 内部辅助：给 SessionReadOnlyError 抛点用。 */
-  static readonly ReadOnlySentinel = new SessionReadOnlyError("__sentinel__" as SessionId, "__noop__");
+  static readonly ReadOnlySentinel = new SessionReadOnlyError(
+    "__sentinel__" as SessionId,
+    "__noop__",
+  );
 }
