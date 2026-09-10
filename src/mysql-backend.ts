@@ -1,15 +1,21 @@
 import {
+  SessionLogOffset,
   type SessionEvent,
   type SessionHeader,
   type SessionId,
-  SessionLogOffset,
+  SESSION_FORMAT_VERSION,
 } from "@deepseek-ai/dsh-session";
 import {
-  type PersistenceBackend,
-  SessionPersistenceRevision,
-  type SessionStorageMetadata,
-  type StoredPrefix,
-  type StoredSuffix,
+  SessionAlreadyExistsError,
+  SessionHandleClosedError,
+  SessionPersistenceNotFoundError,
+  SessionReadOnlyError,
+  assertStoredId,
+  assertVersion,
+  type SessionHandleReadResult,
+  type SessionLocation,
+  type SessionPersistenceRevision,
+  SessionPersistenceRevision as brandRevision,
 } from "@deepseek-ai/dsh-session-persistence";
 import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 
@@ -42,12 +48,28 @@ interface SessionRow extends RowDataPacket {
 }
 
 /**
- * MySQL 会话持久化后端。实现 {@link PersistenceBackend}（tornMarker 恒为
- * undefined：写路径单事务，InnoDB 原子，无撕裂尾部），写 hook 走写池、读
- * hook 走读池。
+ * 一个成功读取的会话存储视图。承载 handle.read 所需的所有信息。
  */
-export class MysqlBackend implements PersistenceBackend<undefined> {
-  /** 后端标签，用于协调器诊断与 dispose 失败汇总。 */
+interface ReadStoredLog {
+  /** 反序列化的会话头（已对齐到当前 SESSION_FORMAT_VERSION）。 */
+  readonly meta: SessionHeader;
+  /** 连续事件序列（无撕裂尾）。 */
+  readonly events: readonly SessionEvent[];
+  /** 继承前缀长度（独立元数据，0 表示未 seed）。 */
+  readonly inheritedEventCount: SessionLogOffset;
+  /** 当前事件总数（用于 read offset 边界）。 */
+  readonly eventCount: number;
+  /** 来源限定 revision（stat/list 用）。 */
+  readonly revision: SessionPersistenceRevision;
+}
+
+/**
+ * MySQL 存储原语层。把"会话头 + 事件流"映射到 InnoDB 表上的原子写；
+ * 写路径单事务（无撕裂尾），并发写用 SELECT ... FOR UPDATE + 复合主键兜底。
+ * 不持有任何进程内状态——单写者由 tracker 保证，跨进程序列化由 MySQL 锁保证。
+ */
+export class MysqlBackend {
+  /** 后端标签（诊断与 effect 命名）。 */
   readonly name = "session-persistence-mysql";
   /** 写连接池。 */
   private readonly writePool: Pool;
@@ -57,9 +79,9 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
   private readonly sharedPool: boolean;
   /** 表名集合。 */
   private readonly names: TableNames;
-  /** revision 来源限定前缀（区分不同存储源）。 */
+  /** revision 来源限定前缀。 */
   private readonly revisionPrefix: string;
-  /** 是否启用 chunk run 折叠写入。 */
+  /** 是否启用 chunk run 折叠写入（0.1.5 起保留配置但不再使用）。 */
   private readonly packChunks: boolean;
 
   /**
@@ -84,20 +106,20 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
    * @returns 品牌化 revision。
    */
   private revision(logRev: number): SessionPersistenceRevision {
-    return SessionPersistenceRevision(`${this.revisionPrefix}#${logRev}`);
+    return brandRevision(`${this.revisionPrefix}#${logRev}`);
   }
 
   /**
    * 从会话头行还原 SessionHeader。旧模型把 fork 边界存于 header.seedLength；
-   * 0.1.2 起 header 以必填 isSeeded 表达，继承前缀长度改由 inheritedEventCount
-   * 单独承载。落盘仍用 seed_length 列编码该前缀（仅 isSeeded 时非空），与 JSONL
-   * 参考实现逐位一致，故此处由「列非空」推导 isSeeded。
+   * 0.1.5 起 header 不再带 seedLength，由 inheritedEventCount 单独承载。落盘
+   * 沿用 seed_length 列：非空即 isSeeded，数值为 inheritedEventCount。
+   * 版本字段固定刷为当前 SESSION_FORMAT_VERSION（schema 迁移已就位）。
    * @param row - sessions 表行。
-   * @returns 还原的会话头（含 isSeeded，不含已移除的 seedLength）。
+   * @returns 还原的会话头。
    */
   private headerFromRow(row: SessionRow): SessionHeader {
     return {
-      version: row.version,
+      version: SESSION_FORMAT_VERSION,
       id: row.session_id as SessionId,
       createdAt: row.created_at,
       isSeeded: row.seed_length !== null,
@@ -110,22 +132,25 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
   }
 
   /**
-   * 从会话头行还原存储元数据（header + 继承前缀长度）。loadStored/loadStoredFrom
-   * 需返回 StoredPrefix/StoredSuffix 所要求的 inheritedEventCount。
+   * 从会话头行还原 storage 元数据（header + inheritedEventCount）。
    * @param row - sessions 表行。
-   * @returns 存储元数据。
+   * @returns 重建结果（不含 events）。
    */
-  private storageFromRow(row: SessionRow): SessionStorageMetadata {
+  private metadataFromRow(row: SessionRow): {
+    meta: SessionHeader;
+    inheritedEventCount: SessionLogOffset;
+    logRev: number;
+  } {
     return {
       meta: this.headerFromRow(row),
       inheritedEventCount: SessionLogOffset(row.seed_length ?? 0),
+      logRev: row.log_rev,
     };
   }
 
   /**
    * 由会话头 + 继承前缀长度派生 sessions 表插入值（不含 log_rev，缺省为 0）。
-   * seed_length 列承载 isSeeded 会话的继承前缀长度；未 seed 会话写 NULL
-   * （与 JSONL header 仅在 isSeeded 时携带 seedLength 的编码一致）。
+   * seed_length 列承载 isSeeded 会话的 inheritedEventCount；未 seed 会话写 NULL。
    * @param meta - 会话头。
    * @param inheritedEventCount - fork 继承前缀长度。
    * @returns 与列序一致的插入数组。
@@ -178,70 +203,7 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
   }
 
   /**
-   * 读取存储前缀（header + 全部事件）。无记录返回 undefined。
-   * @param id - 会话 id。
-   * @param signal - 取消信号。
-   * @returns 存储前缀，含 revision，无 tornMarker。
-   */
-  async loadStored(
-    id: SessionId,
-    signal?: AbortSignal,
-  ): Promise<StoredPrefix<undefined> | undefined> {
-    signal?.throwIfAborted();
-    const header = await this.readHeader(id, this.readPool);
-    if (header === undefined) return undefined;
-    signal?.throwIfAborted();
-    const eventRows = await this.readEventRows(id, this.readPool);
-    signal?.throwIfAborted();
-    return {
-      ...this.storageFromRow(header),
-      events: decodeStoredRows(eventRows),
-      revision: this.revision(header.log_rev),
-    };
-  }
-
-  /**
-   * 只读会话日志修订号（不载入事件）。
-   * @param id - 会话 id。
-   * @param signal - 取消信号。
-   * @returns 当前 revision 或 undefined。
-   */
-  async readStoredRevision(
-    id: SessionId,
-    signal?: AbortSignal,
-  ): Promise<SessionPersistenceRevision | undefined> {
-    signal?.throwIfAborted();
-    const [rows] = await this.readPool.query<SessionRow[]>(
-      `SELECT log_rev FROM \`${this.names.sessions}\` WHERE session_id = ?`,
-      [id],
-    );
-    const row = rows[0];
-    return row === undefined ? undefined : this.revision(row.log_rev);
-  }
-
-  /**
-   * seek-capable 后缀读（readFrom 的后端支撑）。
-   * @param id - 会话 id。
-   * @param fromSeq - 起始 seq（含）。
-   * @param signal - 取消信号。
-   * @returns header + seq>=fromSeq 的事件，或 undefined。
-   */
-  async loadStoredFrom(
-    id: SessionId,
-    fromSeq: SessionLogOffset,
-    signal?: AbortSignal,
-  ): Promise<StoredSuffix | undefined> {
-    signal?.throwIfAborted();
-    const header = await this.readHeader(id, this.readPool);
-    if (header === undefined) return undefined;
-    signal?.throwIfAborted();
-    const eventRows = await this.readEventRows(id, this.readPool, fromSeq);
-    signal?.throwIfAborted();
-    return { ...this.storageFromRow(header), events: decodeStoredRows(eventRows) };
-  }
-
-  /**
-   * 判断错误是否为 MySQL 死锁（errno 1213），用于有限重试。
+   * 判断错误是否为 MySQL 死锁（errno 1213）。
    * @param error - 捕获的错误。
    * @returns 是否死锁。
    */
@@ -255,155 +217,64 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
   }
 
   /**
-   * 持久化一段连续事件批次，lazy materialization 与首批事件同一事务原子提交。
-   * @param storage - 存储元数据（会话头 + 继承前缀长度）。
-   * @param events - 连续事件批次（seq 有序）。
-   * @param isMaterialized - 会话是否已 materialize。
+   * 判断错误是否为 MySQL 重复键（errno 1062），用于把跨进程写者撞 seq 转为
+   * SessionOwnershipLostError 的上游语义依据。
+   * @param error - 捕获的错误。
+   * @returns 是否重复键。
    */
-  async appendBatch(
-    storage: SessionStorageMetadata,
-    events: readonly SessionEvent[],
-    isMaterialized: boolean,
-  ): Promise<void> {
-    // 死锁有限重试：跨进程写同 id 时偶发，退避后重试。
-    let attempt = 0;
-    for (;;) {
-      try {
-        await this.appendBatchOnce(storage, events, isMaterialized);
-        return;
-      } catch (error) {
-        if (this.isDeadlock(error) && attempt < 3) {
-          attempt += 1;
-          await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
-          continue;
-        }
-        throw error;
-      }
-    }
-  }
-
-  /**
-   * appendBatch 的单次事务执行体。
-   * @param storage - 存储元数据（会话头 + 继承前缀长度）。
-   * @param events - 事件批次。
-   * @param isMaterialized - 是否已 materialize。
-   */
-  private async appendBatchOnce(
-    storage: SessionStorageMetadata,
-    events: readonly SessionEvent[],
-    isMaterialized: boolean,
-  ): Promise<void> {
-    const meta = storage.meta;
-    const rows = encodeStorageRows(events, this.packChunks);
-    const conn = await this.writePool.getConnection();
-    try {
-      await conn.beginTransaction();
-      if (!isMaterialized) {
-        await conn.query(
-          `INSERT INTO \`${this.names.sessions}\`
-           (session_id, version, created_at, cwd, parent_session, seed_length,
-            origin, delegation_depth, agent_preset)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          this.headerInsert(meta, storage.inheritedEventCount),
-        );
-      } else {
-        // 锁定会话行，序列化同 id 跨进程写入。
-        const [lock] = await conn.query<SessionRow[]>(
-          `SELECT log_rev FROM \`${this.names.sessions}\` WHERE session_id = ? FOR UPDATE`,
-          [meta.id],
-        );
-        if (lock[0] === undefined) {
-          throw new Error(
-            `append 目标会话未 materialize：${JSON.stringify(meta.id)}（协调器状态与存储不一致）`,
-          );
-        }
-      }
-      // 多行批量插入事件；复合主键唯一约束兜底同 id 双写。
-      const values: unknown[][] = rows.map((row, index) => [
-        meta.id,
-        events[index]?.seq,
-        row.rowType,
-        row.payload,
-      ]);
-      await conn.query(
-        `INSERT INTO \`${this.names.events}\` (session_id, seq, row_type, payload) VALUES ?`,
-        [values],
-      );
-      const [update] = await conn.query<ResultSetHeader>(
-        `UPDATE \`${this.names.sessions}\` SET log_rev = log_rev + 1 WHERE session_id = ?`,
-        [meta.id],
-      );
-      if (update.affectedRows !== 1) {
-        throw new Error(
-          `log_rev 递增失败：会话 ${JSON.stringify(meta.id)} 更新 ${update.affectedRows} 行`,
-        );
-      }
-      await conn.commit();
-    } catch (error) {
-      await conn.rollback();
-      throw error;
-    } finally {
-      conn.release();
-    }
-  }
-
-  /**
-   * 空会话持久化 header（ensureMaterialized 的落点）：不造任何会话事件，仅
-   * 物化一行 sessions。协调器按 id 串行化，不会与 append 的 lazy materialize 竞争。
-   * @param storage - 存储元数据。
-   */
-  async materializeHeader(storage: SessionStorageMetadata): Promise<void> {
-    const conn = await this.writePool.getConnection();
-    try {
-      await conn.beginTransaction();
-      await conn.query(
-        `INSERT INTO \`${this.names.sessions}\`
-         (session_id, version, created_at, cwd, parent_session, seed_length,
-          origin, delegation_depth, agent_preset)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        this.headerInsert(storage.meta, storage.inheritedEventCount),
-      );
-      await conn.commit();
-    } catch (error) {
-      await conn.rollback();
-      throw error;
-    } finally {
-      conn.release();
-    }
-  }
-
-  /**
-   * 持久化崩溃修复：追加 closers。tornMarker 恒为 undefined（事务原子无撕裂尾）。
-   * @param storage - 存储元数据。
-   * @param _tornMarker - 恒为 undefined。
-   * @param closers - 合成关闭事件。
-   */
-  async commitRepair(
-    storage: SessionStorageMetadata,
-    _tornMarker: undefined,
-    closers: readonly SessionEvent[],
-  ): Promise<void> {
-    if (closers.length === 0) return;
-    await this.appendBatch(storage, closers, true);
-  }
-
-  /**
-   * 列出所有已 materialize 会话的 header（轻量，不载事件）。
-   * @param signal - 取消信号。
-   * @returns 会话头数组。
-   */
-  async list(signal?: AbortSignal): Promise<SessionHeader[]> {
-    signal?.throwIfAborted();
-    const [rows] = await this.readPool.query<SessionRow[]>(
-      `SELECT * FROM \`${this.names.sessions}\` ORDER BY session_id`,
+  private isDuplicateKey(error: unknown): boolean {
+    return (
+      typeof error === "object" &&
+      error !== null &&
+      "errno" in error &&
+      (error as { errno?: unknown }).errno === 1062
     );
-    return rows.map((row) => this.headerFromRow(row));
   }
 
   /**
-   * 轻量列出会话快照：header + 来源限定 revision（单次查询，不载事件）。
+   * 读取并校验整个会话日志。session 不存在抛 SessionPersistenceNotFoundError。
+   * @param id - 会话 id。
    * @param signal - 取消信号。
-   * @returns 会话快照数组。
+   * @returns 已校验的完整存储视图。
+   */
+  async readStoredLog(id: SessionId, signal?: AbortSignal): Promise<ReadStoredLog> {
+    signal?.throwIfAborted();
+    const row = await this.readHeader(id, this.readPool);
+    if (row === undefined) throw new SessionPersistenceNotFoundError(id);
+    signal?.throwIfAborted();
+    const header = this.headerFromRow(row);
+    const events = decodeStoredRows(header, await this.readEventRows(id, this.readPool));
+    signal?.throwIfAborted();
+    assertStoredId(id, header);
+    assertVersion(header, this.locate(header));
+    return {
+      meta: header,
+      events,
+      inheritedEventCount: SessionLogOffset(row.seed_length ?? 0),
+      eventCount: events.length,
+      revision: this.revision(row.log_rev),
+    };
+  }
+
+  /**
+   * 仅判断会话是否已 materialize（不读事件）。
+   * @param id - 会话 id。
+   * @param signal - 取消信号。
+   * @returns 是否存在 header 行。
+   */
+  async hasSession(id: SessionId, signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted();
+    const [rows] = await this.readPool.query<RowDataPacket[]>(
+      `SELECT 1 FROM \`${this.names.sessions}\` WHERE session_id = ? LIMIT 1`,
+      [id],
+    );
+    return rows.length > 0;
+  }
+
+  /**
+   * 列出所有已 materialize 会话的快照（单次查询，不载事件）。
+   * @param signal - 取消信号。
+   * @returns 快照数组。
    */
   async listSnapshots(
     signal?: AbortSignal,
@@ -419,6 +290,175 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
   }
 
   /**
+   * 持久化一段连续事件批次：lazy materialization 与首批事件同一事务原子提交。
+   * 已 materialize 的会话通过 SELECT ... FOR UPDATE 序列化同 id 跨进程写入。
+   * @param header - 会话头。
+   * @param events - 连续事件批次（seq 有序）。
+   * @param isMaterialized - 会话是否已 materialize。
+   * @param inheritedEventCount - fork 继承前缀长度。
+   */
+  async persistBatch(
+    header: SessionHeader,
+    events: readonly SessionEvent[],
+    isMaterialized: boolean,
+    inheritedEventCount: SessionLogOffset,
+  ): Promise<void> {
+    let attempt = 0;
+    for (;;) {
+      try {
+        await this.persistBatchOnce(header, events, isMaterialized, inheritedEventCount);
+        return;
+      } catch (error) {
+        if (this.isDeadlock(error) && attempt < 3) {
+          attempt += 1;
+          await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * persistBatch 的单次事务执行体。
+   * @param header - 会话头。
+   * @param events - 事件批次。
+   * @param isMaterialized - 是否已 materialize。
+   * @param inheritedEventCount - fork 继承前缀长度。
+   */
+  private async persistBatchOnce(
+    header: SessionHeader,
+    events: readonly SessionEvent[],
+    isMaterialized: boolean,
+    inheritedEventCount: SessionLogOffset,
+  ): Promise<void> {
+    const rows = encodeStorageRows(events);
+    const conn = await this.writePool.getConnection();
+    try {
+      await conn.beginTransaction();
+      if (!isMaterialized) {
+        try {
+          await conn.query(
+            `INSERT INTO \`${this.names.sessions}\`
+             (session_id, version, created_at, cwd, parent_session, seed_length,
+              origin, delegation_depth, agent_preset)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            this.headerInsert(header, inheritedEventCount),
+          );
+        } catch (error) {
+          if (this.isDuplicateKey(error)) {
+            throw new SessionAlreadyExistsError(header.id);
+          }
+          throw error;
+        }
+      } else {
+        // 锁定会话行，序列化同 id 跨进程写入。
+        const [lock] = await conn.query<SessionRow[]>(
+          `SELECT log_rev FROM \`${this.names.sessions}\` WHERE session_id = ? FOR UPDATE`,
+          [header.id],
+        );
+        if (lock[0] === undefined) {
+          throw new SessionHandleClosedError(header.id, "append");
+        }
+      }
+      // 多行批量插入事件；复合主键唯一约束兜底同 id 双写。
+      const values: unknown[][] = rows.map((row, index) => [
+        header.id,
+        events[index]?.seq,
+        row.rowType,
+        row.payload,
+      ]);
+      if (values.length > 0) {
+        try {
+          await conn.query(
+            `INSERT INTO \`${this.names.events}\` (session_id, seq, row_type, payload) VALUES ?`,
+            [values],
+          );
+        } catch (error) {
+          if (this.isDuplicateKey(error)) {
+            throw new SessionHandleClosedError(header.id, "append");
+          }
+          throw error;
+        }
+      }
+      const [update] = await conn.query<ResultSetHeader>(
+        `UPDATE \`${this.names.sessions}\` SET log_rev = log_rev + 1 WHERE session_id = ?`,
+        [header.id],
+      );
+      if (update.affectedRows !== 1) {
+        throw new Error(
+          `log_rev 递增失败：会话 ${JSON.stringify(header.id)} 更新 ${update.affectedRows} 行`,
+        );
+      }
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
+   * 空会话持久化 header（flush 的落点）：不造任何会话事件，仅物化一行 sessions。
+   * 协调器按 id 串行化，不会与 append 的 lazy materialize 竞争。
+   * @param header - 会话头。
+   * @param inheritedEventCount - fork 继承前缀长度。
+   */
+  async persistHeader(
+    header: SessionHeader,
+    inheritedEventCount: SessionLogOffset,
+  ): Promise<void> {
+    const conn = await this.writePool.getConnection();
+    try {
+      await conn.beginTransaction();
+      try {
+        await conn.query(
+          `INSERT INTO \`${this.names.sessions}\`
+           (session_id, version, created_at, cwd, parent_session, seed_length,
+            origin, delegation_depth, agent_preset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          this.headerInsert(header, inheritedEventCount),
+        );
+      } catch (error) {
+        if (this.isDuplicateKey(error)) {
+          throw new SessionAlreadyExistsError(header.id);
+        }
+        throw error;
+      }
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
+   * 解析后端工件位置：MySQL 整库即后端，会话 id 即物理位置。
+   * @param meta - 会话头。
+   * @returns 定位信息（kind=数据库 schema，path=表前缀 + session id）。
+   */
+  locate(meta: SessionHeader): SessionLocation {
+    return {
+      kind: `mysql:${this.names.sessions}`,
+      path: `${this.names.sessions}/${meta.id}`,
+    };
+  }
+
+  /**
+   * 在 read 上下文（handle.read 之前）调用：保证目标会话存在并可读。
+   * @param id - 会话 id。
+   * @param signal - 取消信号。
+   */
+  async assertReadable(id: SessionId, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    const exists = await this.hasSession(id, signal);
+    if (!exists) throw new SessionPersistenceNotFoundError(id);
+  }
+
+  /**
    * 关闭后端持有的连接池（同库模式只关一次）。
    */
   async close(): Promise<void> {
@@ -428,4 +468,7 @@ export class MysqlBackend implements PersistenceBackend<undefined> {
       await Promise.all([this.writePool.end(), this.readPool.end()]);
     }
   }
+
+  /** 内部辅助：给 SessionReadOnlyError 抛点用。 */
+  static readonly ReadOnlySentinel = new SessionReadOnlyError("__sentinel__" as SessionId, "__noop__");
 }

@@ -31,17 +31,27 @@ export function balancedTurnEvents(startSeq = 0, turn = 1): SessionEvent[] {
 }
 
 /**
- * 构造一个 assistant/chunk 事件（text-delta），用于测折叠。
+ * 构造一个 assistant/message 事件（0.1.5 替代旧 assistant/chunk 的 assistant 内容块）。
+ * 仅用于测试落盘路径——validateStoredEvents 要求 message 含 id/role/source/content。
  * @param seq - 事件序号。
- * @param text - 增量文本。
- * @param index - 块索引。
- * @returns chunk 事件。
+ * @param text - 完整消息文本。
+ * @returns assistant message 事件。
  */
-export function chunkEvent(seq: number, text: string, index = 0): SessionEvent {
+export function chunkEvent(seq: number, text: string): SessionEvent {
   return {
-    type: "assistant/chunk",
+    type: "assistant/message",
     seq,
     time: 1_000 + seq,
-    data: { turn: 1, step: 1, chunk: { type: "text-delta", index, text } },
-  } as SessionEvent;
+    data: {
+      turn: 1,
+      step: 1,
+      message: {
+        id: `msg-${seq}`,
+        role: "assistant",
+        source: { kind: "model", provider: "test", model: "test" },
+        content: [{ kind: "text", text }],
+      },
+    },
+    surfaceOp: "append",
+  } as unknown as SessionEvent;
 }

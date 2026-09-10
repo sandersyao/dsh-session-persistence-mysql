@@ -95,4 +95,4 @@ The backend adds no prompt or schema. Resume restores stored surface events as m
 - **`list()` is unpaginated and unfiltered** (seam constraint).
 - **Plaintext by default** — session events may contain sensitive content (conversations, tool results, request headers). `ENCRYPTION_KEY` is a reserved extension point; application-level field encryption is deferred. Deployers should consider MySQL native TDE / at-rest encryption.
 - **TLS/transport enforcement deferred** — `MYSQL_SSL_REQUIRED` is reserved; may be provided by a cloud provider.
-- **Pinned to `^0.1.1-rc.2` peers** — official `v0.1.2-alpha.3` compatibility is future work; high test coverage is the safety net.
+- **Pinned to `^0.1.5-rc.x` peers** — aligned with the dsh `0.1.5-rc.x` session-persistence contract; upgrade together with `@deepseek-ai/dsh-session` / `@deepseek-ai/dsh-session-persistence`.

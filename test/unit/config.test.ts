@@ -20,7 +20,6 @@ describe("loadSettingsFromEnv", () => {
     expect(settings.connection.host).toBe("127.0.0.1");
     expect(settings.connection.port).toBe(3306);
     expect(settings.connection.tablePrefix).toBe("dsh_");
-    expect(settings.persistence.writeBatchMaxDelayMs).toBe(200);
     expect(settings.persistence.packChunks).toBe(true);
     expect(settings.pool.poolSize).toBe(10);
     expect(settings.security.schemaAutoMigrate).toBe(true);

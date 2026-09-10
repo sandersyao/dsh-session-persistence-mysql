@@ -37,7 +37,7 @@ function minimalSettings(tablePrefix = "t_"): MysqlSettings {
       sslRequired: false,
     },
     pool: { poolSize: 1, minIdle: 0, idleTimeout: 1000, acquireTimeout: 1000, queueLimit: 0 },
-    persistence: { writeBatchMaxDelayMs: 10, preparedSessionCacheSize: 1, packChunks: false },
+    persistence: { packChunks: false },
     security: { encryptionKey: undefined, schemaAutoMigrate: true },
   };
 }
@@ -65,11 +65,9 @@ function fakePool(conn: unknown) {
   };
 }
 
-const header = { version: 0, id: "s1", createdAt: 1, isSeeded: false };
-/** 未 seed 会话的存储元数据。 */
-const storage = { meta: header, inheritedEventCount: 0 };
+const header = { version: 3, id: "s1", createdAt: 1, isSeeded: false };
 
-describe("MysqlBackend.appendBatch：死锁重试", () => {
+describe("MysqlBackend.persistBatch：死锁重试", () => {
   it("瞬时死锁（前 2 次抛 1213）后重试成功", async () => {
     let beginCalls = 0;
     const beginTransaction = async () => {
@@ -79,7 +77,7 @@ describe("MysqlBackend.appendBatch：死锁重试", () => {
     const pool = fakePool(fakeConnection(beginTransaction));
     const backend = new MysqlBackend(pool as never, pool as never, true, minimalSettings());
 
-    await backend.appendBatch(storage, balancedTurnEvents(0), false);
+    await backend.persistBatch(header, balancedTurnEvents(0), false, 0);
     // 3 次 beginTransaction：2 次死锁 + 1 次成功。
     expect(beginCalls).toBe(3);
   });
@@ -93,7 +91,7 @@ describe("MysqlBackend.appendBatch：死锁重试", () => {
     const pool = fakePool(fakeConnection(beginTransaction));
     const backend = new MysqlBackend(pool as never, pool as never, true, minimalSettings());
 
-    await expect(backend.appendBatch(storage, balancedTurnEvents(0), false)).rejects.toThrow();
+    await expect(backend.persistBatch(header, balancedTurnEvents(0), false, 0)).rejects.toThrow();
     // 初始 1 次 + 重试 3 次 = 4 次。
     expect(beginCalls).toBe(4);
   });

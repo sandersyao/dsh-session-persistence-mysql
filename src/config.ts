@@ -44,12 +44,12 @@ export interface PoolSettings {
 
 /**
  * 持久化语义设置。
+ *
+ * 0.1.5 起 batching 策略下沉到 handle 层（{@link MysqlSessionHandle} 的
+ * `LIVE_WRITE_BATCH_MAX_DELAY_MS` 内部常量，与 JSONL 后端对齐）。插件
+ * 只保留与存储介质相关的 `packChunks` 开关。
  */
 export interface PersistenceSettings {
-  /** 空闲队列收到写入后，固定 batching 等待窗口（毫秒）。 */
-  readonly writeBatchMaxDelayMs: number;
-  /** 冷加载后保留供复用的未发布会话数上限。 */
-  readonly preparedSessionCacheSize: number;
   /** 是否启用 chunk run 折叠写入。 */
   readonly packChunks: boolean;
 }
@@ -106,6 +106,9 @@ function intFromEnv(value: string | undefined, fallback: number, label: string):
  * 与 dsh-storage-mysql 的 `STORAGE_*`、dsh-credentials-mysql 的 `CREDENTIALS_*`
  * 同一模式：多 MySQL 插件共用一套 `MYSQL_*` 部署，又各自能被独享前缀独立配置
  * （指向专属库 / 专属表前缀 / 专属凭据），同库共存。
+ *
+ * 0.1.5 起 `WRITE_BATCH_DELAY_MS` 与 `PREPARED_CACHE_SIZE` 已下沉为 handle
+ * 层内部常量，不再从环境变量读取；保留它们的回退解析仅为历史兼容（值会被忽略）。
  * @param env - 环境变量快照。
  * @param key - 配置段名（如 `HOST`、`READ_HOST`、`POOL_SIZE`）。
  * @returns 独享值或共享回退值，均可能为 undefined。
@@ -208,16 +211,6 @@ export function loadSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): Mysql
   };
 
   const persistence: PersistenceSettings = {
-    writeBatchMaxDelayMs: intFromEnv(
-      fromEnv(env, "WRITE_BATCH_DELAY_MS"),
-      200,
-      "SESSION_WRITE_BATCH_DELAY_MS/MYSQL_WRITE_BATCH_DELAY_MS",
-    ),
-    preparedSessionCacheSize: intFromEnv(
-      fromEnv(env, "PREPARED_CACHE_SIZE"),
-      5,
-      "SESSION_PREPARED_CACHE_SIZE/MYSQL_PREPARED_CACHE_SIZE",
-    ),
     // 布尔默认开：仅当任一来源显式 "false" 时关闭（与 storage 的 autoMigrate 语义一致）。
     packChunks: env.SESSION_PACK_CHUNKS !== "false" && env.MYSQL_PACK_CHUNKS !== "false",
   };
@@ -320,9 +313,6 @@ export function mergeSettings(
       queueLimit: p?.queueLimit ?? base.pool.queueLimit,
     },
     persistence: {
-      writeBatchMaxDelayMs: ps?.writeBatchMaxDelayMs ?? base.persistence.writeBatchMaxDelayMs,
-      preparedSessionCacheSize:
-        ps?.preparedSessionCacheSize ?? base.persistence.preparedSessionCacheSize,
       packChunks: ps?.packChunks ?? base.persistence.packChunks,
     },
     security: {

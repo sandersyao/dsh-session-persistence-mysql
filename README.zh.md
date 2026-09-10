@@ -96,4 +96,4 @@ await ctx.plugin(MysqlSessionPersistence, {
 - **`list()` 不分页不过滤**（接缝约束）。
 - **默认明文**——事件可能含敏感内容（对话/工具结果/请求头）。`ENCRYPTION_KEY` 为预留扩展位，应用层字段加密暂缓；部署方可考虑 MySQL 原生 TDE / 静态加密。
 - **TLS/传输暂缓**——`MYSQL_SSL_REQUIRED` 为预留位，届时可能由云服务商提供。
-- **peer 对齐 `^0.1.1-rc.2`**——官方 `v0.1.2-alpha.3` 兼容为后续工作；以高覆盖率作安全网。
+- **peer 对齐 `^0.1.5-rc.x`**——与 dsh `0.1.5-rc.x` session-persistence 契约同步；升级本插件时请同步升级 `@deepseek-ai/dsh-session` / `@deepseek-ai/dsh-session-persistence`。

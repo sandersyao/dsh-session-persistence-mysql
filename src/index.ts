@@ -1,25 +1,38 @@
 import { type Context, Service } from "@deepseek-ai/cordis";
-import type {
-  Session,
-  SessionEvent,
-  SessionHeader,
-  SessionId,
+import {
   SessionLogOffset,
-  SessionPreparation,
+  type SessionId,
+  type SessionHeader,
+  SESSION_FORMAT_VERSION,
 } from "@deepseek-ai/dsh-session";
 import {
-  type BorrowedSessionSource,
-  PersistenceCoordinator,
-  type SessionEventSuffix,
-  type SessionInspection,
-  type SessionLocation,
+  SessionAlreadyExistsError,
   SessionPersistence,
+  SessionPersistenceNotFoundError,
+  materializeAppendBatch,
+  materializeCreateHeader,
+  type SessionAccess,
+  type SessionHandle,
+  type SessionHandleAppendOptions,
+  type SessionHandleFlushOptions,
+  type SessionHandleReadOptions,
+  type SessionHandleReadResult,
+  type SessionPersistenceCreateOptions,
+  type SessionPersistenceListOptions,
+  type SessionPersistenceOpenOptions,
   type SessionPersistenceSnapshot,
+  type SessionPersistenceStatOptions,
+  type SessionPersistenceRevision,
 } from "@deepseek-ai/dsh-session-persistence";
 import z from "@deepseek-ai/schemastery";
 
 import { loadSettingsFromEnv, mergeSettings, type SettingsOverrides } from "./config.js";
 import { MysqlBackend } from "./mysql-backend.js";
+import {
+  MysqlBackendTracker,
+  MysqlSessionHandle,
+  type StorageHandleState,
+} from "./mysql-handle.js";
 import { createReadPool, createWritePool } from "./pool.js";
 import { ensureSchema } from "./schema.js";
 
@@ -52,8 +65,6 @@ export const MysqlConfig = z.object({
     queueLimit: z.number(),
   }),
   persistence: z.object({
-    writeBatchMaxDelayMs: z.number(),
-    preparedSessionCacheSize: z.number(),
     packChunks: z.boolean(),
   }),
   security: z.object({
@@ -63,31 +74,31 @@ export const MysqlConfig = z.object({
 });
 
 /**
- * MySQL 会话持久化后端插件。加载后注册为 `ctx.sessionPersistence`，并通过
- * 协调器安装写入路径。与 JSONL 后端行为契约等价。
+ * MySQL 会话持久化后端插件。加载后注册为 `ctx.sessionPersistence`，并接管
+ * session/event / session/flush / session/disposed 三个事件流做 live event
+ * 路由与 teardown drain。与 JSONL 后端契约等价，但用 InnoDB 行锁替代跨进程
+ * 文件锁；事件 append 用复合主键唯一约束兜底同 id 双写。
  */
 export class MysqlSessionPersistence extends SessionPersistence {
   /** 后端标签（诊断用，遮蔽基类 name 但不改变注册键 sessionPersistence）。 */
   override readonly name = "session-persistence-mysql";
-  /** 本后端不暴露每会话独立工件。 */
-  override readonly supportsRawArtifacts = false;
-  /** 注入 sessions 服务（硬依赖）。 */
+  /** 注入 sessions 服务（live event 路由依赖 ctx.sessions）。 */
   static inject = ["sessions"];
   /** 插件配置 schema。 */
   static Config = MysqlConfig;
-  /** 后端实例（实现 PersistenceBackend）。 */
+  /** 后端存储原语。 */
   private readonly backend: MysqlBackend;
-  /** 写/读连接池共享标记。 */
-  private readonly sharedPool: boolean;
-  /** 写连接池（close 用）。 */
+  /** 写连接池（dispose 关闭）。 */
   private readonly writePool: import("mysql2/promise").Pool;
-  /** 合并后的后端设置（env 基址 + 用户覆盖）。 */
+  /** 合并后的后端设置。 */
   private readonly settings: import("./config.js").MysqlSettings;
-  /** 协调器（在 [Service.init] 中创建，确保 schema 就绪）。 */
-  private coordinator!: PersistenceCoordinator<undefined>;
+  /** 进程内 tracker（单写者约束 + open handles + live 路由）。 */
+  private readonly tracker: MysqlBackendTracker;
+  /** 启动时是否已就绪（init 完成）。 */
+  private ready: Promise<void> | undefined;
 
   /**
-   * 构造插件：解析 env 设置、建池、建后端。异步 schema 初始化推迟到 init。
+   * 构造插件：解析 env 设置、建池、建后端与 tracker。schema 初始化推迟到 init。
    * @param ctx - Cordis 上下文。
    * @param config - 用户配置覆盖（可空，env 为基址）。
    */
@@ -97,125 +108,231 @@ export class MysqlSessionPersistence extends SessionPersistence {
     this.settings = settings;
     const writePool = createWritePool(settings.connection, settings.pool);
     const readPool = createReadPool(settings.connection, settings.readConnection, settings.pool);
-    this.sharedPool = readPool === writePool;
     this.writePool = writePool;
-    this.backend = new MysqlBackend(writePool, readPool, this.sharedPool, settings);
+    this.backend = new MysqlBackend(writePool, readPool, readPool === writePool, settings);
+    this.tracker = new MysqlBackendTracker(this.name);
   }
 
   /**
-   * 异步初始化：连接测试 + 幂等 schema + 版本校验，然后创建协调器（写入
-   * 路径监听在 schema 就绪后才安装）。
+   * 异步初始化：连接测试 + 幂等 schema + 版本校验；完成后挂载 tracker 路由。
    */
   async [Service.init](): Promise<void> {
-    await ensureSchema(this.writePool, this.settings.connection.tablePrefix, {
-      autoMigrate: this.settings.security.schemaAutoMigrate,
-    });
-    this.coordinator = new PersistenceCoordinator(this.ctx, this.backend, {
-      preparedSessionCacheSize: this.settings.persistence.preparedSessionCacheSize,
-      writeBatchMaxDelayMs: this.settings.persistence.writeBatchMaxDelayMs,
-    });
+    if (this.ready) return this.ready;
+    this.ready = (async () => {
+      await ensureSchema(this.writePool, this.settings.connection.tablePrefix, {
+        autoMigrate: this.settings.security.schemaAutoMigrate,
+      });
+      this.tracker.install(this.ctx);
+    })();
+    return this.ready;
   }
 
   /**
-   * 解析后端工件位置：MySQL 无每会话独立工件，返回 undefined。
-   * @param _meta - 会话头。
-   * @returns 恒为 undefined。
-   */
-  override locate(_meta: SessionHeader): SessionLocation | undefined {
-    return undefined;
-  }
-
-  /**
-   * 注册新会话元数据（lazy，首次 append 时 materialize）。
+   * 解析后端工件位置：MySQL 整库即后端，会话 id 即物理位置。
    * @param meta - 会话头。
-   * @param inheritedEventCount - 继承父会话的前缀长度（仅 seeded 会话传）。
+   * @returns 定位信息。
    */
-  override create(meta: SessionHeader, inheritedEventCount?: SessionLogOffset): Promise<void> {
-    return this.coordinator.create(meta, inheritedEventCount);
+  locate(meta: SessionHeader): { kind: string; path: string } {
+    return this.backend.locate(meta);
   }
 
   /**
-   * 空会话也持久化 header（即便无任何会话事件也构成可恢复资源）。
-   * @param session - 已登记到写路径的会话实例。
+   * Create a new stored session and take its write ownership. The session is
+   * visible to this process immediately; the physical row appears on its
+   * first append or flush.
+   * @param header - 会话头（须 lossless JSON + 非负整数 createdAt）。
+   * @param options - 含 inheritedEventCount 与可选 signal。
+   * @returns owned write handle.
    */
-  override ensureMaterialized(session: Session): Promise<void> {
-    return this.coordinator.ensureMaterialized(session);
+  override async create(
+    header: SessionHeader,
+    options?: SessionPersistenceCreateOptions,
+  ): Promise<SessionHandle> {
+    await this.ready;
+    options?.signal?.throwIfAborted();
+    const snapshot = materializeCreateHeader(header);
+    if (snapshot.version !== SESSION_FORMAT_VERSION) {
+      // materializer 可能保留了别的版本号；MySQL 后端要求严格 v3，强制修正。
+      (snapshot as { version: number }).version = SESSION_FORMAT_VERSION;
+    }
+    const inheritedEventCount = SessionLogOffset(options?.inheritedEventCount ?? 0);
+    if (snapshot.isSeeded && inheritedEventCount === 0) {
+      throw new TypeError(
+        `session "${snapshot.id}" is seeded but inheritedEventCount is 0; create refused to attach zero-length fork lineage`,
+      );
+    }
+    if (!snapshot.isSeeded && inheritedEventCount !== 0) {
+      throw new TypeError(
+        `session "${snapshot.id}" is not seeded but inheritedEventCount=${inheritedEventCount}; create refused`,
+      );
+    }
+    options?.signal?.throwIfAborted();
+    // 已存在性检查（同一后端内存 + 数据库合并判断）。
+    if (this.tracker.hasPending(snapshot.id) || (await this.backend.hasSession(snapshot.id, options?.signal))) {
+      throw new SessionAlreadyExistsError(snapshot.id);
+    }
+    options?.signal?.throwIfAborted();
+    this.tracker.registerCreated(snapshot, inheritedEventCount);
+    const state: StorageHandleState = {
+      cursor: 0,
+      materialized: false,
+      inheritedEventCount,
+    };
+    return this.tracker.adopt(
+      new MysqlSessionHandle(this.backend, this.tracker, snapshot.id, snapshot, "write", state),
+    );
   }
 
   /**
-   * 持久化一段连续事件批次。
+   * Open an existing stored session for `read` or single-writer `write`.
    * @param id - 会话 id。
-   * @param events - 连续事件批次。
+   * @param access - `read` 或 `write`。
+   * @param options - 可选 signal。
+   * @returns opened handle.
    */
-  override append(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
-    return this.coordinator.append(id, events);
-  }
-
-  /**
-   * 准备并预留用于 resume 的未发布会话。
-   * @param id - 会话 id。
-   * @param signal - 取消信号。
-   */
-  override prepare(id: SessionId, signal?: AbortSignal): Promise<SessionPreparation> {
-    return this.coordinator.prepare(id, signal);
-  }
-
-  /**
-   * 加载平衡的逻辑日志视图并提交冷恢复。
-   * @param id - 会话 id。
-   */
-  override load(id: SessionId): Promise<SessionInspection> {
-    return this.coordinator.load(id);
-  }
-
-  /**
-   * 非破坏检查逻辑会话。
-   * @param id - 会话 id。
-   * @param signal - 取消信号。
-   */
-  override inspect(id: SessionId, signal?: AbortSignal): Promise<SessionInspection> {
-    return this.coordinator.inspect(id, signal);
-  }
-
-  /**
-   * 借用一个精确的会话视图，同时钉住其可复用的 prepared 会话源，便于后续
-   * prepare 复用。返回的可 Disposable 观测在释放前保持未发布会话不被回收。
-   * @param id - 待观察的已持久化会话。
-   * @param signal - 取消信号。
-   */
-  override borrowSession(id: SessionId, signal?: AbortSignal): Promise<BorrowedSessionSource> {
-    return this.coordinator.borrowSession(id, signal);
-  }
-
-  /**
-   * 从 fromSeq 起读存储事件（detached 后缀读）。
-   * @param id - 会话 id。
-   * @param fromSeq - 起始日志偏移（含）。
-   * @param signal - 取消信号。
-   */
-  override readFrom(
+  override async open(
     id: SessionId,
-    fromSeq: SessionLogOffset,
-    signal?: AbortSignal,
-  ): Promise<SessionEventSuffix> {
-    return this.coordinator.readFrom(id, fromSeq, signal);
+    access: SessionAccess,
+    options?: SessionPersistenceOpenOptions,
+  ): Promise<SessionHandle> {
+    await this.ready;
+    options?.signal?.throwIfAborted();
+
+    // pending（create 过但未落盘）：仅本进程可见；read 直接基于 pending header 给出空事件视图。
+    const pending = this.tracker.pendingOf(id);
+    if (access === "read") {
+      if (pending !== undefined) {
+        const state: StorageHandleState = {
+          cursor: 0,
+          materialized: false,
+          inheritedEventCount: pending.inheritedEventCount,
+        };
+        return this.tracker.adopt(
+          new MysqlSessionHandle(this.backend, this.tracker, id, pending.header, "read", state),
+        );
+      }
+      const stored = await this.backend.readStoredLog(id, options?.signal);
+      const state: StorageHandleState = {
+        cursor: stored.eventCount,
+        materialized: true,
+        inheritedEventCount: stored.inheritedEventCount,
+      };
+      return this.tracker.adopt(
+        new MysqlSessionHandle(this.backend, this.tracker, id, stored.meta, "read", state),
+      );
+    }
+
+    // write：先认领；若失败清理。
+    this.tracker.claimWrite(id);
+    try {
+      const stored = await this.backend.readStoredLog(id, options?.signal);
+      this.tracker.materialized(id); // 即便本来是 pending 路径，到此也已落盘，清掉 pending。
+      const state: StorageHandleState = {
+        cursor: stored.eventCount,
+        materialized: true,
+        inheritedEventCount: stored.inheritedEventCount,
+      };
+      return this.tracker.adopt(
+        new MysqlSessionHandle(this.backend, this.tracker, id, stored.meta, "write", state),
+      );
+    } catch (error) {
+      this.tracker.releaseClaim(id);
+      if (
+        !(error instanceof SessionPersistenceNotFoundError) &&
+        !(error instanceof Error && /not found/i.test(error.message))
+      ) {
+        throw error;
+      }
+      throw new SessionPersistenceNotFoundError(id);
+    }
   }
 
   /**
-   * 轻量列出所有 materialized 会话 header。
-   * @param signal - 取消信号。
+   * 服务级 flush：等待每个写 handle 的 buffered 排干并落盘。
    */
-  override list(signal?: AbortSignal): Promise<SessionHeader[]> {
-    return this.backend.list(signal);
+  override flush(): Promise<void> {
+    return this.tracker.flushAll();
   }
 
   /**
-   * 轻量列出会话快照（header + 来源限定 revision）。
-   * @param signal - 取消信号。
+   * 读取某个会话的快照（不读事件）。
+   * @param id - 会话 id。
+   * @param options - 可选 signal。
+   * @returns snapshot 或 undefined。
    */
-  override listSnapshots(signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]> {
-    return this.backend.listSnapshots(signal);
+  override async stat(
+    id: SessionId,
+    options?: SessionPersistenceStatOptions,
+  ): Promise<SessionPersistenceSnapshot | undefined> {
+    await this.ready;
+    options?.signal?.throwIfAborted();
+    const pending = this.tracker.pendingOf(id);
+    if (pending !== undefined) {
+      return { header: pending.header, revision: pending.revision };
+    }
+    const exists = await this.backend.hasSession(id, options?.signal);
+    if (!exists) return undefined;
+    const stored = await this.backend.readStoredLog(id, options?.signal);
+    return {
+      header: stored.meta,
+      revision: stored.revision,
+      eventCount: stored.eventCount,
+    };
+  }
+
+  /**
+   * 列出所有可见会话快照（本进程 pending + 已落盘）。
+   * @param options - 可选 signal。
+   * @returns 快照数组。
+   */
+  override async list(
+    options?: SessionPersistenceListOptions,
+  ): Promise<readonly SessionPersistenceSnapshot[]> {
+    await this.ready;
+    options?.signal?.throwIfAborted();
+    const listed = new Set<SessionId>();
+    const snapshots: SessionPersistenceSnapshot[] = [];
+    const stored = await this.backend.listSnapshots(options?.signal);
+    for (const snap of stored) {
+      listed.add(snap.header.id);
+      snapshots.push({
+        header: snap.header,
+        revision: snap.revision,
+      });
+    }
+    for (const [id, entry] of this.tracker.pendingEntries()) {
+      if (listed.has(id)) continue;
+      snapshots.push({ header: entry.header, revision: entry.revision });
+    }
+    return snapshots;
+  }
+
+  /**
+   * 关闭后端持有的连接池（Cordis dispose 时由本实现负责关闭）。
+   */
+  async dispose(): Promise<void> {
+    await this.backend.close();
   }
 }
 
 export default MysqlSessionPersistence;
+
+/**
+ * 重导出便于消费方按需导入的 helper / 类型。
+ */
+export type {
+  SessionAccess,
+  SessionHandle,
+  SessionHandleAppendOptions,
+  SessionHandleFlushOptions,
+  SessionHandleReadOptions,
+  SessionHandleReadResult,
+  SessionPersistenceCreateOptions,
+  SessionPersistenceListOptions,
+  SessionPersistenceOpenOptions,
+  SessionPersistenceSnapshot,
+  SessionPersistenceStatOptions,
+  SessionPersistenceRevision,
+};
+// Keep `materialize*` symbols re-exportable to ease downstream consumption.
+export { materializeAppendBatch, materializeCreateHeader };
