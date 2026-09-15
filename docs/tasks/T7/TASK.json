@@ -1,0 +1,25 @@
+{
+  "id": "T7",
+  "title": "跨进程租约模式（cluster/lease）实现",
+  "status": "planned",
+  "dependsOn": ["T6"],
+  "owner": "repo-agent",
+  "phase": "design-converged",
+  "designFile": "docs/LEASE_MODE_DESIGN.md",
+  "compat": "dsh 0.1.5-rc.2：dsh-session/dsh-session-persistence 的 types 与 lib JS 相对 rc.1 字节一致，仅 package.json peer 范围变化；本插件 peer ^0.1.5-rc.1 接受 rc.2 → 无需改代码；devDeps 已升到 0.1.5-rc.2 并复测全绿（75 测试、coverage 97.95%）；peer 仍 ^0.1.5-rc.1（覆盖 rc.1/rc.2）",
+  "review": "16 项设计评审已收敛：1 为评审误判（源仓库 README 确有该引用，已撤回）；4 复核发现并修复 fence 复位问题（close 改为标记释放、保留 fence）；2/3/5/6/7/8/9/10/11/13/14/15/16 已按处理意见修订 LEASE_MODE_DESIGN.md；12 时序图已补。",
+  "acceptedCriteria": [
+    "cluster.lease.enabled=false 时与单实例逐字节一致（既有 75 测试全绿）",
+    "leases 表 DDL + tableNames/cleanup/db/smoke 接线 + SCHEMA_VERSION 2→3 迁移",
+    "open('write')/create 原子认领（接管→判定→INSERT；空行 INSERT 撞 1062 回退重新判定）；活跃持有 → SessionAlreadyOwnedError；失败回滚本地 claim",
+    "append/flush 写事务内 fence 校验，且先于幂等 no-op 分支；fence 不符 → SessionOwnershipLostError；保留内容真冲突的普通 Error",
+    "fence 永不回退：close 标记释放保留 fence（或全局单调序列）",
+    "心跳 TTL/interval/missThreshold；close/abort/asyncDispose/tracker sweep/失锁 清理定时器",
+    "租约 DML 与 fence 读走主库（usePrimaryOnly）；leaseConnection 生命周期纳入 dispose()",
+    "契约测试：争抢/围栏/崩溃接管/续租抖动/兼容/幂等×fence 顺序/fence 不复位",
+    "typecheck 0、biome、build、test:coverage lines≥90"
+  ],
+  "openQuestions": [],
+  "techDebt": [],
+  "handoffTo": "implementation"
+}
