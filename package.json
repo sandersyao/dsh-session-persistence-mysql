@@ -1,21 +1,21 @@
 {
   "name": "@sandersyao/dsh-session-persistence-mysql",
-  "version": "0.1.5-rc.1",
+  "version": "0.1.5-rc.2",
   "description": "MySQL durable session persistence backend for the DeepSeek Harness",
   "type": "module",
   "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
+  "types": "lib/index.d.ts",
   "author": "姚晓威 <sanders.yao@gmail.com>",
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
+      "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
-    "lib/types/**/*.d.ts",
+    "lib/index.d.ts",
     "cordis.patch.yml"
   ],
   "dsh": {

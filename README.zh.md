@@ -91,6 +91,7 @@ await ctx.plugin(MysqlSessionPersistence, {
 
 - **无删除/归档 API**——接缝本无；清理是库外 `DELETE` 运维职责。
 - **`list()` 不分页不过滤**（接缝约束）。
+- **跨进程租约仅限单主库（TD-008）**——可选 `cluster.lease` 通过 `leases` 行串行化写者，并在每次 `append` 校验围栏；它假设所有租约流量都到达同一个写主库（`writePool`）。多主/读写分离拓扑专用的 lease-primary 连接，以及已释放/过期租约行的回收，均暂缓；两者都需要把当前的按行 `fence_token + 1`（仅因释放不删行才安全）换成全局单调 fence 序列。
 - **默认明文**——事件可能含敏感内容（对话/工具结果/请求头）。`ENCRYPTION_KEY` 为预留扩展位，应用层字段加密暂缓；部署方可考虑 MySQL 原生 TDE / 静态加密。
 - **TLS/传输暂缓**——`MYSQL_SSL_REQUIRED` 为预留位，届时可能由云服务商提供。
 - **peer 对齐 `^0.1.5-rc.x`**——与 dsh `0.1.5-rc.x` session-persistence 契约同步；升级本插件时请同步升级 `@deepseek-ai/dsh-session` / `@deepseek-ai/dsh-session-persistence`。

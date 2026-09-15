@@ -90,6 +90,7 @@ The backend adds no prompt or schema. Resume restores stored surface events as m
 
 - **No delete/archive API** — the seam has none; pruning stored sessions is out-of-band `DELETE` maintenance.
 - **`list()` is unpaginated and unfiltered** (seam constraint).
+- **Cross-process lease mode is single-primary only (TD-008)** — the opt-in `cluster.lease` mode serializes writers through a `leases` row and fences every `append`; it assumes all lease traffic reaches one write primary (`writePool`). A dedicated lease-primary connection for multi-primary / read-split topologies, and reclamation of released or expired lease rows, are deferred. Both need a global monotonic fence sequence instead of the current per-row `fence_token + 1`, which is only safe because released rows are kept (never deleted).
 - **Plaintext by default** — session events may contain sensitive content (conversations, tool results, request headers). `ENCRYPTION_KEY` is a reserved extension point; application-level field encryption is deferred. Deployers should consider MySQL native TDE / at-rest encryption.
 - **TLS/transport enforcement deferred** — `MYSQL_SSL_REQUIRED` is reserved; may be provided by a cloud provider.
 - **Pinned to `^0.1.5-rc.x` peers** — aligned with the dsh `0.1.5-rc.x` session-persistence contract; upgrade together with `@deepseek-ai/dsh-session` / `@deepseek-ai/dsh-session-persistence`.

@@ -2,7 +2,7 @@
 
 本项目为 Pre-1.0，遵循 [语义化版本](https://semver.org/)。插件版本对齐当前运行的 dsh：`0.1.x` 对齐 `^0.1.5-rc.x`。
 
-## Unreleased
+## 0.1.5-rc.2 (2026-09-15)
 
 ### 功能：跨进程租约（cluster/lease）模式
 - 新增 opt-in `cluster.lease.*` 配置（默认 `enabled=false`，关闭时行为与单实例逐字节一致）。
@@ -11,7 +11,8 @@
 - `append` / `flush` 在写事务内、**幂等 no-op 判定之前**校验围栏：不符 → `SessionOwnershipLostError`；同事务机会式续租。
 - 心跳续租（`ttlMs/3`，连续失败达阈值判丢锁）；`close` **非删除式**释放（保留 fence，防复位）。
 - 测试：争抢 / 围栏（含幂等×fence 顺序）/ 过期接管 / fence 不复位 / 心跳 / claim-renew-release / 空行竞态 / 兼容（**85 例**，覆盖率 lines 97.1%）。
-- 暂缓：多主 / 独立 lease-primary、租约行清扫（需全局 fence 序列）→ TD-008。
+- 暂缓：多主 / 独立 lease-primary、租约行清扫（需全局 fence 序列）→ TD-008（已登记 README「Known Limitations and Deferred Work / 已知限制与待办」）。
+- 修复打包：类型声明实际产物为 `lib/index.d.ts`，此前 `package.json` 指向不存在的 `lib/types/index.d.ts` 且未随包发布（现已修正 `types`/`exports`/`files`）。
 
 ## 0.1.5-rc.1 (2026-09-10) —— 适配 dsh 0.1.5-rc.1 契约
 
