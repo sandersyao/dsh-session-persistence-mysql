@@ -1,6 +1,6 @@
 {
   "project": "dsh-session-persistence-mysql",
-  "updatedAt": "2026-09-01",
+  "updatedAt": "2026-09-10",
   "items": [
     {
       "id": "TD-001",
@@ -50,6 +50,13 @@
       "description": "mysql-backend.ts 的 ER_LOCK_DEADLOCK 重试分支与读写异库 close() 分支此前未定向覆盖。",
       "resolution": "新增 test/unit/mysql-backend.test.ts（4 例）：mock 池注入瞬时/持续死锁验证重试与放弃；同库/异库 close 验证。",
       "status": "resolved"
+    },
+    {
+      "id": "TD-008",
+      "title": "跨进程租约：多主 lease-primary 与租约行清扫暂缓",
+      "description": "跨进程租约模式（T7）已落地单库（writePool）版本：认领/心跳/释放与 append 内 fence 校验均在写事务内，close 为非删除式释放以保持 per-row fence 单调。但 (a) 多主/读写分离拓扑下的独立 lease-primary 连接（cluster.lease.leaseConnection）与跨库 fence 一致性未实现；(b) 已释放/过期租约行不会被回收，长期会累积。",
+      "decision": "本轮只保证单主库正确性；owner_id/expires_at 的过期行可安全复用（认领时接管或 INSERT 1062 回退重判）。(a)(b) 需引入全局单调 fence 序列（替代 per-row fence_token+1）与周期性 sweeper，作为独立后续任务。",
+      "status": "deferred"
     }
   ]
 }

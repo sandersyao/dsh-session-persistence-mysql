@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertTablePrefix,
   eventsDdl,
+  leasesDdl,
   metaDdl,
   SCHEMA_VERSION,
   sessionsDdl,
@@ -69,7 +70,22 @@ describe("DDL 语句", () => {
     expect(ddl).toContain("PRIMARY KEY (version)");
   });
 
-  it("当前 SCHEMA_VERSION 为 2（0.1.5 起，会话头格式从 v0 升到 SESSION_FORMAT_VERSION=3）", () => {
-    expect(SCHEMA_VERSION).toBe(2);
+  it("当前 SCHEMA_VERSION 为 3（会话格式 v3 + leases 表）", () => {
+    expect(SCHEMA_VERSION).toBe(3);
+  });
+
+  it("leases DDL 含围栏/到期列且不建外键", () => {
+    const ddl = leasesDdl("dsh_leases");
+    for (const field of [
+      "session_id",
+      "owner_id",
+      "fence_token",
+      "expires_at",
+      "last_heartbeat_at",
+    ]) {
+      expect(ddl).toContain(field);
+    }
+    expect(ddl).toContain("PRIMARY KEY (session_id)");
+    expect(ddl).not.toContain("FOREIGN KEY");
   });
 });

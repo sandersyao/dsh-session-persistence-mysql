@@ -295,7 +295,7 @@ DELETE FROM `${prefix}leases` WHERE expires_at < ?
   - 将 `leases` 表（及其写入）限定在唯一一个主库（或共识组中的单一 leader）；其余主库/副本只承载 `events` 的读写，不写 `leases`。
   - 若使用组复制（MGR）/ 云 RDS 多可用区，需确保 `leases` 写入走单一 leader，且 fence 校验读也读该 leader（或强一致读），而非异步副本。
   - **租约主库故障**：租约写入暂停 → 新认领/续租阻塞；已持有者凭内存 handle 工作直到 `expires_at`；主库恢复或晋升新 leader 后，过期会话走 §4.1 第 1 步 接管。这与既有的"崩溃锁定窗口≈TTL"模型一致，无新增风险。
-- **配置体现**：`cluster.lease.usePrimaryOnly: true`（默认 true）强制所有 lease 操作绕过 `readPool`、走 `writePool`；多主部署额外提供 `cluster.lease.leaseConnection`（指向 lease-primary）以与主库分离指定（见 §9）。
+- **当前实现（已落地）**：租约的认领 / 心跳 / 释放以及 `append` 内的 fence 校验读**一律在 `writePool` 的写事务内**完成，即隐含 `usePrimaryOnly=true`。**独立的 `cluster.lease.leaseConnection`（多主 lease-primary 连接）本轮暂缓**——多主拓扑仍要求 `leases` 由单一主库写入，但连接分离与跨库 fence 一致性未实现，登记于 TD-008（见 §9/§12）。
 
 ## 9. 配置项（建议）
 
@@ -308,9 +308,9 @@ cluster:
     heartbeatIntervalMs: 7000 # 续租间隔，建议 ≈ ttl/3
     heartbeatMissThreshold: 2 # 连续失败 N 个周期判丢锁（抗抖动）
     ownerId: ""              # 缺省自动生成为 hostname+pid+uuid
-    usePrimaryOnly: true     # 租约 DML 与 fence 读强制走主库（绕过只读副本），默认 true
-    leaseConnection: ""      # 多主部署时指向 lease-primary 的连接；空=复用主库 writePool
 ```
+
+> **本轮实现的配置面**即上述字段（`SESSION_LEASE_*` / `MYSQL_LEASE_*` 环境变量或 `cluster.lease` 覆盖）。`usePrimaryOnly` 恒等价于 `true`（租约 DML 未路由到 `readPool`）；多主专用 `leaseConnection` 未实现 → TD-008。
 
 ## 10. 测试策略（契约级）
 
@@ -326,24 +326,25 @@ cluster:
 
 > 以下为预计落点（基于当前代码核对），**实现期需再次对照源码**；本设计文档不动代码。
 
-- [ ] `src/schema.ts`：新增 `${prefix}leases` DDL（§3）+ `tableNames()` 扩展 + `SCHEMA_VERSION 2→3` 迁移；同步 `test/helpers/cleanup.ts`、`test/helpers/db.ts`、`scripts/smoke.mjs` 的清理/建表接线。
-- [ ] `src/mysql-handle.ts`：新增 `claimLease` / `renewLease` / `releaseLease`（**非删除式**释放）；`MysqlBackendTracker` 关联 lease 状态与心跳生命周期。
-- [ ] `src/index.ts`：`open(id,'write')`（`:226` 后）与 `create`（`:169-175` 之间）插入认领；失败走 `releaseClaim`；handle 携带 `owner_id` + `fence_token` + 心跳定时器。
-- [ ] `src/mysql-backend.ts`：`persistBatchOnce` 写事务内、**幂等判定之前**追加 fence 校验；fence 不符抛 `SessionOwnershipLostError`；**保留**现有“同 seq 不同内容”的普通 `Error` 冲突。
-- [ ] `src/config.ts`：新增 `cluster.lease.*`（schemastery `z.object`，默认 `enabled=false`）；`leaseConnection` 的建/关/健康检查纳入 `dispose()`。
-- [ ] 心跳：持锁启动 `setInterval(ttl/3)`；`close` / `abort` / `asyncDispose` / tracker ctx-dispose sweep / 失锁 均 `clearInterval`；续租命中 0 行或连续 N 次失败 → 标记失效 + 后续 append 抛错。
-- [ ] 契约测试：§10 六项（含幂等×fence 顺序、fence 不复位）+ 兼容测试。
+- [x] `src/schema.ts`：新增 `${prefix}leases` DDL（§3，无外键）+ `tableNames()` 扩展 + `SCHEMA_VERSION 2→3` 迁移；已同步 `test/helpers/db.ts` 清理接线（`scripts/smoke.mjs` 无表清理，无需改动）。
+- [x] 租约操作落在 `src/mysql-backend.ts`：`claimLease` / `renewLease` / `releaseLease`（**非删除式**释放，仅置 `owner_id=''`,`expires_at=0`，保留 `fence_token`）+ `assertLeaseFence`；`src/mysql-handle.ts` 持有 lease 状态与心跳生命周期。
+- [x] `src/index.ts`：`open(id,'write')` 与 `create` 认领租约，失败即释放；handle 携带 `fence_token` + 心跳定时器（`ownerId` 由实例统一生成 `hostname:pid:uuid`）。
+- [x] `src/mysql-backend.ts`：`persistBatch` / `persistBatchOnce` / `persistHeader` 在 `beginTransaction()` 后、**幂等判定之前**追加 fence 校验；fence 不符抛 `SessionOwnershipLostError`；保留“同 seq 不同内容”的普通 `Error` 冲突。同事务内机会式续租。
+- [x] `src/config.ts`：新增 `cluster.lease.*`（默认 `enabled=false`，`SESSION_LEASE_*` / `MYSQL_LEASE_*` 优先）；`leaseConnection` 未引入，无独立生命周期需要 `dispose()` 处理。
+- [x] 心跳：持锁启动 `setInterval(ttl/3)`（`heartbeatIntervalMs`）；`close` / 释放 / 失锁均 `clearInterval`；续租命中 0 行或连续 N 次失败 → 标记失效 + 后续 `append` 抛 `SessionOwnershipLostError`。`close` 先清心跳再**非删除式**释放。
+- [x] 契约测试：§10 六项（含幂等×fence 顺序、fence 不复位）+ 兼容测试，见 `test/integration/lease.test.ts` 与 `test/unit/handle-unit.test.ts`。
 
 ## 12. 开放问题收敛结论
 
 | # | 原问题 | 结论 |
 |---|--------|------|
 | 1 | TTL 取值 | **已定**：默认 15–30s / 间隔 ≈ ttl/3 / N=2–3（选取依据 §6.1，配置项 §9）。按环境 GC/网络抖动微调。 |
-| 2 | MySQL HA / 多主库 | **已定方案**：租约流量钉在单一主库（§8.5）；读写分离仅用于 bulk events 读；多主拓扑下 `leases` 仅由单一 lease-primary 写入，fence 全序得以保持。 |
+| 2 | MySQL HA / 多主库 | **已定方案**：租约流量钉在单一主库（§8.5）；读写分离仅用于 bulk events 读。**实现进度**：本轮租约 DML 走 `writePool` 写事务；多主专用 `leaseConnection` / 跨库 fence 一致性**暂缓** → TD-008。 |
 | 3 | fence 生成 | **已定**：接管用原子 `UPDATE … SET fence_token = fence_token + 1 WHERE …`（§4.1 第 1 步）在行锁内递增；禁止应用层「先读 MAX 再写」。**补充**：per-row `+1` 要求**行不被删除**（close 只标记释放）；若删行则必须改用全局单调序列，否则 fence 复位（§4.4/§5）。 |
 | 4 | 混合模式 | **已定：禁止非租约实例混入**；靠统一 profile patch 强制（§8 混合部署保护）。 |
 | 5 | owner 持久化 | **已定：无需持久化 owner 身份**；实例重建后 `owner_id` 变化属正常，fence 已区分代次。 |
+| 6 | 多主 lease-primary / 租约行清扫 | **暂缓（TD-008）**：独立 `leaseConnection` 与跨库 fence 校验、以及回收已释放/过期行的 sweeper（需引入全局单调 fence 序列以替代 per-row `+1`）留待后续；当前 non-deleting release 已保证单库下 fence 不复位。 |
 
 ---
 
-> 本设计文档作为 `dsh-session-persistence-mysql` 补齐分布式租约层的实现前设计。当前**仅设计、未实现**；实现时请回填 §11 TODO，并逐节核对本文的设计约定（尤其是 §3 表结构、§4 操作语义、§6 恢复语义、§9 配置项）。
+> 本设计文档作为 `dsh-session-persistence-mysql` 补齐分布式租约层的实现前设计。**实现进度**：§11 TODO 中除「多主 lease-primary / 租约行清扫」（TD-008）外均已落地，见 `test/integration/lease.test.ts` 与 CHANGELOG。单实例/关闭租约时行为不变。

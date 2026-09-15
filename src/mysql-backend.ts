@@ -10,13 +10,15 @@ import {
   assertVersion,
   SessionPersistenceRevision as brandRevision,
   SessionAlreadyExistsError,
+  SessionAlreadyOwnedError,
   SessionHandleClosedError,
   type SessionLocation,
+  SessionOwnershipLostError,
   SessionPersistenceNotFoundError,
   type SessionPersistenceRevision,
   SessionReadOnlyError,
 } from "@deepseek-ai/dsh-session-persistence";
-import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 
 import type { MysqlSettings } from "./config.js";
 import { decodeStoredRows, encodeStorageRows } from "./mysql-codec.js";
@@ -44,6 +46,27 @@ interface SessionRow extends RowDataPacket {
   readonly delegation_depth: number;
   readonly agent_preset: string | null;
   readonly log_rev: number;
+}
+
+/**
+ * leases 表读取行。
+ */
+interface LeaseRow extends RowDataPacket {
+  readonly owner_id: string;
+  readonly fence_token: number;
+  readonly expires_at: number;
+}
+
+/**
+ * 写路径携带的租约围栏信息（cluster/lease 模式）；缺省表示未启用租约。
+ */
+export interface LeaseFence {
+  /** 写所有者标识。 */
+  readonly ownerId: string;
+  /** 围栏令牌。 */
+  readonly fenceToken: number;
+  /** 租约 TTL（毫秒），用于写事务内机会式续租。 */
+  readonly ttlMs: number;
 }
 
 /**
@@ -80,6 +103,8 @@ export class MysqlBackend {
   private readonly names: TableNames;
   /** revision 来源限定前缀。 */
   private readonly revisionPrefix: string;
+  /** 是否启用跨进程租约（cluster/lease 模式）。 */
+  private readonly leaseEnabled: boolean;
 
   /**
    * 构造 MySQL 后端。
@@ -94,6 +119,12 @@ export class MysqlBackend {
     this.sharedPool = sharedPool;
     this.names = tableNames(settings.connection.tablePrefix);
     this.revisionPrefix = `${settings.connection.database}/${settings.connection.tablePrefix}:v${SCHEMA_VERSION}`;
+    this.leaseEnabled = settings.cluster.lease.enabled;
+  }
+
+  /** 租约是否启用（handle/index 构造时决定是否认领）。 */
+  get leasesEnabled(): boolean {
+    return this.leaseEnabled;
   }
 
   /**
@@ -262,6 +293,165 @@ export class MysqlBackend {
   }
 
   /**
+   * 写事务内校验围栏并机会式续租。租约行不存在按兼容放行（单实例遗留会话）；
+   * 令牌不符抛 {@link SessionOwnershipLostError}。用调用方同一 conn/事务，保证
+   * 原子，且 `FOR UPDATE` 行锁阻止并发接管在本次写提交前发生。
+   * @param conn - 写事务连接。
+   * @param id - 会话 id。
+   * @param lease - 围栏信息。
+   */
+  private async assertLeaseFence(
+    conn: PoolConnection,
+    id: SessionId,
+    lease: LeaseFence,
+  ): Promise<void> {
+    const [rows] = await conn.query<LeaseRow[]>(
+      `SELECT fence_token FROM \`${this.names.leases}\` WHERE session_id = ? FOR UPDATE`,
+      [id],
+    );
+    const row = rows[0];
+    if (row === undefined) return;
+    if (Number(row.fence_token) !== lease.fenceToken) {
+      throw new SessionOwnershipLostError(id);
+    }
+    // 机会式续租：活跃写顺带延长租约，避免在写事务进行中过期被接管。
+    const now = Date.now();
+    await conn.query(
+      `UPDATE \`${this.names.leases}\` SET expires_at = ?, last_heartbeat_at = ? WHERE session_id = ? AND fence_token = ?`,
+      [now + lease.ttlMs, now, id, lease.fenceToken],
+    );
+  }
+
+  /**
+   * 原子认领会话写所有权（cluster/lease 模式）。算法：先尝试接管已过期/已释放
+   * 行；未命中则判定：活跃持有 → SessionAlreadyOwnedError；无行 → INSERT（撞
+   * 1062 则回退重新判定）。fence 由行内 `+1` 在行锁内递增，永不回退。
+   * @param id - 会话 id。
+   * @param ownerId - 写所有者标识。
+   * @param ttlMs - 租约 TTL（毫秒）。
+   * @returns 认领到的围栏令牌。
+   * @throws SessionAlreadyOwnedError 当会话被他人活跃持有。
+   */
+  async claimLease(id: SessionId, ownerId: string, ttlMs: number): Promise<number> {
+    // 认领事务内的 UPDATE/SELECT/INSERT 会在两个并发的“空行认领”之间形成
+    // 间隙锁 + 插入意向锁的环路 → InnoDB 报 1213 死锁（整个事务被回滚）。
+    // 这里在事务之外包一层重试：回滚后以新事务重做，重做时会读到对方已插入的
+    // 活跃行，从而正确地判为 SessionAlreadyOwnedError。
+    for (let txAttempt = 0; txAttempt < 4; txAttempt += 1) {
+      const conn = await this.writePool.getConnection();
+      try {
+        await conn.beginTransaction();
+        const fence = await this.claimLeaseTx(conn, id, ownerId, ttlMs);
+        await conn.commit();
+        return fence;
+      } catch (error) {
+        await conn.rollback().catch(() => {});
+        if (this.isDeadlock(error) && txAttempt < 3) continue;
+        throw error;
+      } finally {
+        conn.release();
+      }
+    }
+    // 仅在连续 3 次死锁重试后仍失败时到达；按“未取得所有权”收敛。
+    throw new SessionAlreadyOwnedError(id);
+  }
+
+  /**
+   * 单次认领事务体：接管已过期/已释放行，否则判定或插入；**不提交**，由调用方管理
+   * 事务边界与死锁重试。fence 由行内 `+1` 在行锁内递增，永不回退。
+   * @param conn - 已开启事务的连接。
+   * @param id - 会话 id。
+   * @param ownerId - 写所有者标识。
+   * @param ttlMs - 租约 TTL（毫秒）。
+   * @returns 认领到的围栏令牌。
+   * @throws SessionAlreadyOwnedError 当会话被他人活跃持有。
+   */
+  private async claimLeaseTx(
+    conn: PoolConnection,
+    id: SessionId,
+    ownerId: string,
+    ttlMs: number,
+  ): Promise<number> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const now = Date.now();
+      const [upd] = await conn.query<ResultSetHeader>(
+        `UPDATE \`${this.names.leases}\`
+         SET owner_id = ?, fence_token = fence_token + 1, acquired_at = ?, expires_at = ?, last_heartbeat_at = ?
+         WHERE session_id = ? AND expires_at <= ?`,
+        [ownerId, now, now + ttlMs, now, id, now],
+      );
+      if (upd.affectedRows === 1) {
+        const [rows] = await conn.query<LeaseRow[]>(
+          `SELECT fence_token FROM \`${this.names.leases}\` WHERE session_id = ?`,
+          [id],
+        );
+        return Number(rows[0]?.fence_token);
+      }
+      const [rows] = await conn.query<LeaseRow[]>(
+        `SELECT owner_id, fence_token, expires_at FROM \`${this.names.leases}\` WHERE session_id = ?`,
+        [id],
+      );
+      const row = rows[0];
+      if (row === undefined) {
+        try {
+          await conn.query(
+            `INSERT INTO \`${this.names.leases}\`
+             (session_id, owner_id, fence_token, acquired_at, expires_at, last_heartbeat_at)
+             VALUES (?, ?, 1, ?, ?, ?)`,
+            [id, ownerId, now, now + ttlMs, now],
+          );
+          return 1;
+        } catch (error) {
+          // 空行认领竞态：另一并发方已插入 → 回退重读并重新判定。
+          if (this.isDuplicateKey(error)) continue;
+          throw error;
+        }
+      }
+      if (Number(row.expires_at) > now) {
+        throw new SessionAlreadyOwnedError(id);
+      }
+      // 已过期但 UPDATE 未命中（并发竞态）→ 重试接管。
+    }
+    throw new SessionAlreadyOwnedError(id);
+  }
+
+  /**
+   * 心跳续租：仅当前 owner+fence 匹配时刷新到期时间。
+   * @param id - 会话 id。
+   * @param ownerId - 写所有者标识。
+   * @param fenceToken - 围栏令牌。
+   * @param ttlMs - 租约 TTL（毫秒）。
+   * @returns 命中 1 行即续租成功；0 行表示已失去所有权。
+   */
+  async renewLease(
+    id: SessionId,
+    ownerId: string,
+    fenceToken: number,
+    ttlMs: number,
+  ): Promise<boolean> {
+    const now = Date.now();
+    const [res] = await this.writePool.query<ResultSetHeader>(
+      `UPDATE \`${this.names.leases}\` SET expires_at = ?, last_heartbeat_at = ? WHERE session_id = ? AND owner_id = ? AND fence_token = ?`,
+      [now + ttlMs, now, id, ownerId, fenceToken],
+    );
+    return res.affectedRows === 1;
+  }
+
+  /**
+   * 释放租约：**不删除行**（保留 fence 单调性），仅标记为空闲（owner=''、expires_at=0）。
+   * @param id - 会话 id。
+   * @param ownerId - 写所有者标识。
+   * @param fenceToken - 围栏令牌。
+   */
+  async releaseLease(id: SessionId, ownerId: string, fenceToken: number): Promise<void> {
+    const now = Date.now();
+    await this.writePool.query(
+      `UPDATE \`${this.names.leases}\` SET owner_id = '', expires_at = 0, last_heartbeat_at = ? WHERE session_id = ? AND owner_id = ? AND fence_token = ?`,
+      [now, id, ownerId, fenceToken],
+    );
+  }
+
+  /**
    * 读取并校验整个会话日志。session 不存在抛 SessionPersistenceNotFoundError。
    * @param id - 会话 id。
    * @param signal - 取消信号。
@@ -326,17 +516,19 @@ export class MysqlBackend {
    * @param events - 连续事件批次（seq 有序）。
    * @param isMaterialized - 会话是否已 materialize。
    * @param inheritedEventCount - fork 继承前缀长度。
+   * @param lease - 可选的围栏信息（cluster/lease 模式）；缺省不校验围栏。
    */
   async persistBatch(
     header: SessionHeader,
     events: readonly SessionEvent[],
     isMaterialized: boolean,
     inheritedEventCount: SessionLogOffset,
+    lease?: LeaseFence,
   ): Promise<void> {
     let attempt = 0;
     for (;;) {
       try {
-        await this.persistBatchOnce(header, events, isMaterialized, inheritedEventCount);
+        await this.persistBatchOnce(header, events, isMaterialized, inheritedEventCount, lease);
         return;
       } catch (error) {
         if (this.isDeadlock(error) && attempt < 3) {
@@ -355,17 +547,24 @@ export class MysqlBackend {
    * @param events - 事件批次。
    * @param isMaterialized - 是否已 materialize。
    * @param inheritedEventCount - fork 继承前缀长度。
+   * @param lease - 可选的围栏信息；在写事务内、幂等判定之前校验。
    */
   private async persistBatchOnce(
     header: SessionHeader,
     events: readonly SessionEvent[],
     isMaterialized: boolean,
     inheritedEventCount: SessionLogOffset,
+    lease?: LeaseFence,
   ): Promise<void> {
     const rows = encodeStorageRows(events);
     const conn = await this.writePool.getConnection();
     try {
       await conn.beginTransaction();
+      // 围栏校验必须先于任何重复键/幂等 no-op 判定：陈旧 writer 的“同内容重放”
+      // 不能拿到 no-op 成功，必须抛 SessionOwnershipLostError。
+      if (lease !== undefined) {
+        await this.assertLeaseFence(conn, header.id, lease);
+      }
       if (!isMaterialized) {
         try {
           await conn.query(
@@ -446,11 +645,19 @@ export class MysqlBackend {
    * 协调器按 id 串行化，不会与 append 的 lazy materialize 竞争。
    * @param header - 会话头。
    * @param inheritedEventCount - fork 继承前缀长度。
+   * @param lease - 可选的围栏信息。
    */
-  async persistHeader(header: SessionHeader, inheritedEventCount: SessionLogOffset): Promise<void> {
+  async persistHeader(
+    header: SessionHeader,
+    inheritedEventCount: SessionLogOffset,
+    lease?: LeaseFence,
+  ): Promise<void> {
     const conn = await this.writePool.getConnection();
     try {
       await conn.beginTransaction();
+      if (lease !== undefined) {
+        await this.assertLeaseFence(conn, header.id, lease);
+      }
       try {
         await conn.query(
           `INSERT INTO \`${this.names.sessions}\`

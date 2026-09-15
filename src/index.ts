@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { type Context, Service } from "@deepseek-ai/cordis";
 import {
   SESSION_FORMAT_VERSION,
@@ -29,6 +31,7 @@ import z from "@deepseek-ai/schemastery";
 import { loadSettingsFromEnv, mergeSettings, type SettingsOverrides } from "./config.js";
 import { MysqlBackend } from "./mysql-backend.js";
 import {
+  type HandleLease,
   MysqlBackendTracker,
   MysqlSessionHandle,
   type StorageHandleState,
@@ -68,6 +71,15 @@ export const MysqlConfig = z.object({
     encryptionKey: z.string(),
     schemaAutoMigrate: z.boolean(),
   }),
+  cluster: z.object({
+    lease: z.object({
+      enabled: z.boolean(),
+      ttlMs: z.number(),
+      heartbeatIntervalMs: z.number(),
+      heartbeatMissThreshold: z.number(),
+      ownerId: z.string(),
+    }),
+  }),
 });
 
 /**
@@ -93,6 +105,8 @@ export class MysqlSessionPersistence extends SessionPersistence {
   private readonly tracker: MysqlBackendTracker;
   /** 启动时是否已就绪（init 完成）。 */
   private ready: Promise<void> | undefined;
+  /** 本实例的写所有者标识（cluster/lease 模式）。 */
+  private readonly ownerId: string;
 
   /**
    * 构造插件：解析 env 设置、建池、建后端与 tracker。schema 初始化推迟到 init。
@@ -108,6 +122,26 @@ export class MysqlSessionPersistence extends SessionPersistence {
     this.writePool = writePool;
     this.backend = new MysqlBackend(writePool, readPool, readPool === writePool, settings);
     this.tracker = new MysqlBackendTracker(this.name);
+    const lease = settings.cluster.lease;
+    this.ownerId =
+      lease.ownerId !== "" ? lease.ownerId : `${hostname()}:${process.pid}:${randomUUID()}`;
+  }
+
+  /**
+   * 由围栏令牌构造 handle 的租约上下文；未启用或未认领时为 undefined。
+   * @param fenceToken - 认领到的围栏令牌。
+   * @returns 租约上下文或 undefined。
+   */
+  private leaseFor(fenceToken: number | undefined): HandleLease | undefined {
+    const lease = this.settings.cluster.lease;
+    if (!lease.enabled || fenceToken === undefined) return undefined;
+    return {
+      ownerId: this.ownerId,
+      fenceToken,
+      ttlMs: lease.ttlMs,
+      heartbeatIntervalMs: lease.heartbeatIntervalMs,
+      missThreshold: lease.heartbeatMissThreshold,
+    };
   }
 
   /**
@@ -172,14 +206,38 @@ export class MysqlSessionPersistence extends SessionPersistence {
       throw new SessionAlreadyExistsError(snapshot.id);
     }
     options?.signal?.throwIfAborted();
-    this.tracker.registerCreated(snapshot, inheritedEventCount);
+    // cluster/lease：先跨进程原子认领写所有权；本地登记失败则回退释放。
+    let fenceToken: number | undefined;
+    if (this.settings.cluster.lease.enabled) {
+      fenceToken = await this.backend.claimLease(
+        snapshot.id,
+        this.ownerId,
+        this.settings.cluster.lease.ttlMs,
+      );
+    }
+    try {
+      this.tracker.registerCreated(snapshot, inheritedEventCount);
+    } catch (error) {
+      if (fenceToken !== undefined) {
+        await this.backend.releaseLease(snapshot.id, this.ownerId, fenceToken).catch(() => {});
+      }
+      throw error;
+    }
     const state: StorageHandleState = {
       cursor: 0,
       materialized: false,
       inheritedEventCount,
     };
     return this.tracker.adopt(
-      new MysqlSessionHandle(this.backend, this.tracker, snapshot.id, snapshot, "write", state),
+      new MysqlSessionHandle(
+        this.backend,
+        this.tracker,
+        snapshot.id,
+        snapshot,
+        "write",
+        state,
+        this.leaseFor(fenceToken),
+      ),
     );
   }
 
@@ -224,19 +282,38 @@ export class MysqlSessionPersistence extends SessionPersistence {
 
     // write：先认领；若失败清理。
     this.tracker.claimWrite(id);
+    let fenceToken: number | undefined;
     try {
       const stored = await this.backend.readStoredLog(id, options?.signal);
       this.tracker.materialized(id); // 即便本来是 pending 路径，到此也已落盘，清掉 pending。
+      if (this.settings.cluster.lease.enabled) {
+        fenceToken = await this.backend.claimLease(
+          id,
+          this.ownerId,
+          this.settings.cluster.lease.ttlMs,
+        );
+      }
       const state: StorageHandleState = {
         cursor: stored.eventCount,
         materialized: true,
         inheritedEventCount: stored.inheritedEventCount,
       };
       return this.tracker.adopt(
-        new MysqlSessionHandle(this.backend, this.tracker, id, stored.meta, "write", state),
+        new MysqlSessionHandle(
+          this.backend,
+          this.tracker,
+          id,
+          stored.meta,
+          "write",
+          state,
+          this.leaseFor(fenceToken),
+        ),
       );
     } catch (error) {
       this.tracker.releaseClaim(id);
+      if (fenceToken !== undefined) {
+        await this.backend.releaseLease(id, this.ownerId, fenceToken).catch(() => {});
+      }
       if (
         !(error instanceof SessionPersistenceNotFoundError) &&
         !(error instanceof Error && /not found/i.test(error.message))

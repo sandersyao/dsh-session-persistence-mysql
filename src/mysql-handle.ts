@@ -17,11 +17,12 @@ import {
   type SessionHandleFlushOptions,
   type SessionHandleReadOptions,
   type SessionHandleReadResult,
+  SessionOwnershipLostError,
   type SessionPersistenceRevision,
   SessionReadOnlyError,
 } from "@deepseek-ai/dsh-session-persistence";
 
-import type { MysqlBackend } from "./mysql-backend.js";
+import type { LeaseFence, MysqlBackend } from "./mysql-backend.js";
 
 /**
  * 写 handle 的可变状态：cursor 是该 handle 已知的逻辑末尾，
@@ -40,6 +41,16 @@ export interface StorageHandleState {
 export const LIVE_WRITE_BATCH_MAX_DELAY_MS = 200;
 
 /**
+ * 写 handle 持有的租约上下文：围栏信息 + 心跳参数。
+ */
+export interface HandleLease extends LeaseFence {
+  /** 心跳续租间隔（毫秒）。 */
+  readonly heartbeatIntervalMs: number;
+  /** 连续续租失败达该次数即判丢锁。 */
+  readonly missThreshold: number;
+}
+
+/**
  * 文件存储原语契约，handle 通过它与 MySQL 后端解耦。
  */
 export interface MysqlHandleStorage {
@@ -49,9 +60,18 @@ export interface MysqlHandleStorage {
     events: readonly SessionEvent[],
     isMaterialized: boolean,
     inheritedEventCount: SessionLogOffset,
+    lease?: LeaseFence,
   ): Promise<void>;
   /** 仅持久化 header（用于 flush 一个空的刚 create 的会话）。 */
-  persistHeader(header: SessionHeader, inheritedEventCount: SessionLogOffset): Promise<void>;
+  persistHeader(
+    header: SessionHeader,
+    inheritedEventCount: SessionLogOffset,
+    lease?: LeaseFence,
+  ): Promise<void>;
+  /** 心跳续租（cluster/lease 模式）。缺省表示后端不支持租约。 */
+  renewLease?(id: SessionId, ownerId: string, fenceToken: number, ttlMs: number): Promise<boolean>;
+  /** 释放租约（cluster/lease 模式）。 */
+  releaseLease?(id: SessionId, ownerId: string, fenceToken: number): Promise<void>;
   /** 读取并校验已落盘的整段日志。 */
   readStoredLog(
     id: SessionId,
@@ -105,6 +125,14 @@ export class MysqlSessionHandle implements SessionHandle {
   private drainPaused = false;
   /** 当前 drain promise（合并并发 drain）。 */
   private draining: Promise<void> | undefined;
+  /** 租约上下文（cluster/lease 模式）；仅 write handle 可能非空。 */
+  private readonly lease: HandleLease | undefined;
+  /** 是否已失去所有权（心跳命中 0 行或连续失败达阈值）。 */
+  private leaseLost = false;
+  /** 连续续租失败计数（网络抖动重试，避免误杀）。 */
+  private leaseFailures = 0;
+  /** 心跳续租定时器。 */
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
   /**
    * 构造 handle。
@@ -114,6 +142,7 @@ export class MysqlSessionHandle implements SessionHandle {
    * @param header - 会话头。
    * @param access - 访问权限。
    * @param state - 初始状态。
+   * @param lease - 可选租约上下文（write handle 才启动心跳）。
    */
   constructor(
     storage: MysqlHandleStorage,
@@ -122,6 +151,7 @@ export class MysqlSessionHandle implements SessionHandle {
     header: SessionHeader,
     access: SessionAccess,
     state: StorageHandleState,
+    lease?: HandleLease,
   ) {
     this.storage = storage;
     this.tracker = tracker;
@@ -130,11 +160,88 @@ export class MysqlSessionHandle implements SessionHandle {
     this.access = access;
     this.state = state;
     this.observedLength = state.cursor;
+    this.lease = lease;
+    if (lease !== undefined && access === "write") {
+      this.startHeartbeat(lease);
+    }
   }
 
   /** 继承前缀长度（handle 暴露字段）。 */
   get inheritedEventCount(): SessionLogOffset {
     return this.state.inheritedEventCount;
+  }
+
+  /**
+   * 启动周期心跳续租（interval = heartbeatIntervalMs）。
+   * @param lease - 租约上下文。
+   */
+  private startHeartbeat(lease: HandleLease): void {
+    const timer = setInterval(() => {
+      void this.renewLeaseOnce();
+    }, lease.heartbeatIntervalMs);
+    // 不要因为心跳定时器阻止进程退出。
+    (timer as { unref?: () => void }).unref?.();
+    this.heartbeatTimer = timer;
+  }
+
+  /** 停掉心跳定时器（幂等）。 */
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer !== undefined) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+  }
+
+  /**
+   * 单次心跳：命中续租成功清零失败计数；否则累加，连续失败达阈值判丢锁。
+   * 瞬时异常（网络抖动/MySQL 短暂不可达）只累加计数，不立即判死。
+   */
+  private async renewLeaseOnce(): Promise<void> {
+    const lease = this.lease;
+    if (lease === undefined || this.leaseLost) return;
+    const renew = this.storage.renewLease;
+    if (renew === undefined) return;
+    try {
+      const ok = await renew.call(
+        this.storage,
+        this.id,
+        lease.ownerId,
+        lease.fenceToken,
+        lease.ttlMs,
+      );
+      if (ok) {
+        this.leaseFailures = 0;
+        return;
+      }
+      this.leaseFailures += 1;
+    } catch {
+      this.leaseFailures += 1;
+    }
+    if (this.leaseFailures >= lease.missThreshold) {
+      this.markLeaseLost();
+    }
+  }
+
+  /** 标记所有权永久丢失并停心跳；后续 append/flush 抛 SessionOwnershipLostError。 */
+  private markLeaseLost(): void {
+    if (this.leaseLost) return;
+    this.leaseLost = true;
+    this.clearHeartbeat();
+  }
+
+  /** 若已知丢锁则快速失败（后端写事务内还会做权威 fence 校验）。 */
+  private assertLease(): void {
+    if (this.leaseLost) throw new SessionOwnershipLostError(this.id);
+  }
+
+  /** 当前 handle 的围栏信息（未启用租约时为 undefined）。 */
+  private leaseFence(): LeaseFence | undefined {
+    if (this.lease === undefined) return undefined;
+    return {
+      ownerId: this.lease.ownerId,
+      fenceToken: this.lease.fenceToken,
+      ttlMs: this.lease.ttlMs,
+    };
   }
 
   /**
@@ -210,6 +317,7 @@ export class MysqlSessionHandle implements SessionHandle {
     _options?: SessionHandleAppendOptions,
   ): Promise<void> {
     this.assertOpen("append");
+    this.assertLease();
     return this.runMutation("append", async () => {
       await this.persistContiguous(events);
     });
@@ -224,10 +332,15 @@ export class MysqlSessionHandle implements SessionHandle {
     this.assertOpen("flush");
     return this.runMutation("flush", async () => {
       options?.signal?.throwIfAborted();
+      this.assertLease();
       if (this.access !== "write") throw new SessionReadOnlyError(this.id, "flush");
       await this.drainBuffered();
       if (!this.state.materialized) {
-        await this.storage.persistHeader(this.header, this.state.inheritedEventCount);
+        await this.storage.persistHeader(
+          this.header,
+          this.state.inheritedEventCount,
+          this.leaseFence(),
+        );
         this.state.materialized = true;
         this.tracker.materialized(this.id);
       }
@@ -241,7 +354,8 @@ export class MysqlSessionHandle implements SessionHandle {
   close(): Promise<void> {
     if (this.closing !== undefined) return this.closing;
     const closing = (async () => {
-      // 先清掉计时器（避免 close 期间还在排新的 drain）。
+      // 先停心跳与批量计时器（避免 close 期间还在排新的 drain）。
+      this.clearHeartbeat();
       if (this.batchTimer !== undefined) {
         clearTimeout(this.batchTimer);
         this.batchTimer = undefined;
@@ -249,6 +363,11 @@ export class MysqlSessionHandle implements SessionHandle {
       // drain 当前 buffered（若已经在 drain 则等待它）。
       await this.drainLive();
       await this.chain;
+      // 释放租约：非删除式（保留 fence 单调性）；失败不阻塞 handle 关闭。
+      const lease = this.lease;
+      if (lease !== undefined && this.storage.releaseLease !== undefined && !this.leaseLost) {
+        await this.storage.releaseLease(this.id, lease.ownerId, lease.fenceToken).catch(() => {});
+      }
       this.tracker.release(this, this.state.materialized);
     })();
     this.closing = closing;
@@ -315,11 +434,13 @@ export class MysqlSessionHandle implements SessionHandle {
         );
       }
     }
+    this.assertLease();
     await this.storage.persistBatch(
       this.header,
       events,
       this.state.materialized,
       this.state.inheritedEventCount,
+      this.leaseFence(),
     );
     this.state.cursor += events.length;
     if (!this.state.materialized) {

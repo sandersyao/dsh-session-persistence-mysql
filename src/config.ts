@@ -53,6 +53,23 @@ export interface SecuritySettings {
 }
 
 /**
+ * 跨进程租约（cluster/lease）设置。默认关闭；开启后 `open('write')`/`create`
+ * 在 MySQL 层认领单写者所有权，`append`/`flush` 校验围栏令牌。
+ */
+export interface LeaseSettings {
+  /** 是否启用跨进程租约（默认 false：行为与单实例逐字节一致）。 */
+  readonly enabled: boolean;
+  /** 租约 TTL（毫秒）；建议 15–30s。 */
+  readonly ttlMs: number;
+  /** 心跳续租间隔（毫秒）；建议 ≈ ttlMs/3。 */
+  readonly heartbeatIntervalMs: number;
+  /** 连续续租失败达该次数即判丢锁（抗瞬时抖动）；>=1。 */
+  readonly heartbeatMissThreshold: number;
+  /** 写所有者标识；空则运行时自动生成 hostname+pid+uuid。 */
+  readonly ownerId: string;
+}
+
+/**
  * 合并后的完整 MySQL 后端设置。
  */
 export interface MysqlSettings {
@@ -64,12 +81,20 @@ export interface MysqlSettings {
   readonly pool: PoolSettings;
   /** 安全设置。 */
   readonly security: SecuritySettings;
+  /** 集群/租约设置。 */
+  readonly cluster: { readonly lease: LeaseSettings };
 }
 
 /** 默认连接超时（毫秒）。 */
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 /** 默认字符集。 */
 const DEFAULT_CHARSET = "utf8mb4";
+/** 默认租约 TTL（毫秒）。 */
+const DEFAULT_LEASE_TTL_MS = 20_000;
+/** 默认心跳续租间隔（毫秒）。 */
+const DEFAULT_LEASE_HEARTBEAT_MS = 7_000;
+/** 默认丢锁判定阈值（连续失败周期数）。 */
+const DEFAULT_LEASE_MISS_THRESHOLD = 2;
 
 /**
  * 解析整数环境变量；缺失/非法时回退到默认值。
@@ -201,7 +226,34 @@ export function loadSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): Mysql
       env.SESSION_SCHEMA_AUTO_MIGRATE !== "false" && env.MYSQL_SCHEMA_AUTO_MIGRATE !== "false",
   };
 
-  return { connection, readConnection, pool, security };
+  const lease: LeaseSettings = {
+    enabled:
+      env.SESSION_LEASE_ENABLED === "true" ||
+      env.SESSION_LEASE_ENABLED === "1" ||
+      env.MYSQL_LEASE_ENABLED === "true" ||
+      env.MYSQL_LEASE_ENABLED === "1",
+    ttlMs: intFromEnv(
+      env.SESSION_LEASE_TTL_MS ?? env.MYSQL_LEASE_TTL_MS,
+      DEFAULT_LEASE_TTL_MS,
+      "SESSION_LEASE_TTL_MS/MYSQL_LEASE_TTL_MS",
+    ),
+    heartbeatIntervalMs: intFromEnv(
+      env.SESSION_LEASE_HEARTBEAT_INTERVAL_MS ?? env.MYSQL_LEASE_HEARTBEAT_INTERVAL_MS,
+      DEFAULT_LEASE_HEARTBEAT_MS,
+      "SESSION_LEASE_HEARTBEAT_INTERVAL_MS/MYSQL_LEASE_HEARTBEAT_INTERVAL_MS",
+    ),
+    heartbeatMissThreshold: intFromEnv(
+      env.SESSION_LEASE_HEARTBEAT_MISS_THRESHOLD ?? env.MYSQL_LEASE_HEARTBEAT_MISS_THRESHOLD,
+      DEFAULT_LEASE_MISS_THRESHOLD,
+      "SESSION_LEASE_HEARTBEAT_MISS_THRESHOLD/MYSQL_LEASE_HEARTBEAT_MISS_THRESHOLD",
+    ),
+    ownerId: fromEnv(env, "LEASE_OWNER_ID") ?? "",
+  };
+  if (lease.heartbeatMissThreshold < 1) {
+    throw new Error("LEASE_HEARTBEAT_MISS_THRESHOLD 必须 >= 1");
+  }
+
+  return { connection, readConnection, pool, security, cluster: { lease } };
 }
 
 /**
@@ -234,6 +286,8 @@ export interface SettingsOverrides {
   readonly pool?: Partial<PoolSettings>;
   /** 安全设置覆盖。 */
   readonly security?: Partial<SecuritySettings>;
+  /** 集群/租约设置覆盖。 */
+  readonly cluster?: { readonly lease?: Partial<LeaseSettings> };
 }
 
 /**
@@ -250,6 +304,7 @@ export function mergeSettings(
   const rc = overrides?.readConnection;
   const p = overrides?.pool;
   const sc = overrides?.security;
+  const cl = overrides?.cluster?.lease;
 
   const connection: ConnectionSettings = {
     host: c?.host ?? base.connection.host,
@@ -290,6 +345,16 @@ export function mergeSettings(
     security: {
       encryptionKey: sc?.encryptionKey ?? base.security.encryptionKey,
       schemaAutoMigrate: sc?.schemaAutoMigrate ?? base.security.schemaAutoMigrate,
+    },
+    cluster: {
+      lease: {
+        enabled: cl?.enabled ?? base.cluster.lease.enabled,
+        ttlMs: cl?.ttlMs ?? base.cluster.lease.ttlMs,
+        heartbeatIntervalMs: cl?.heartbeatIntervalMs ?? base.cluster.lease.heartbeatIntervalMs,
+        heartbeatMissThreshold:
+          cl?.heartbeatMissThreshold ?? base.cluster.lease.heartbeatMissThreshold,
+        ownerId: cl?.ownerId ?? base.cluster.lease.ownerId,
+      },
     },
   };
 }

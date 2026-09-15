@@ -8,7 +8,7 @@
     { "id": "T4", "title": "配置/连接池/安全", "status": "completed", "dependsOn": ["T3"] },
     { "id": "T5", "title": "测试体系（安全/契约一致性/e2e/bench/覆盖率）", "status": "completed", "dependsOn": ["T4"] },
     { "id": "T6", "title": "文档收尾与发布前对齐", "status": "completed", "dependsOn": ["T5"] },
-    { "id": "T7", "title": "跨进程租约模式（cluster/lease）实现", "status": "planned", "dependsOn": ["T6"] }
+    { "id": "T7", "title": "跨进程租约模式（cluster/lease）实现", "status": "completed", "dependsOn": ["T6"] }
   ],
   "techDebtFile": "docs/TECH_DEBT.json",
   "designFile": "docs/DESIGN.md"

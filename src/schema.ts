@@ -9,8 +9,10 @@ import type { Pool, RowDataPacket } from "mysql2/promise";
  * - v2：0.1.5 起的会话格式升级——版本号对齐到 SESSION_FORMAT_VERSION (3)，
  *        seed_length 列语义不变（仍是 isSeeded 时存 inheritedEventCount），
  *        旧 v0 行在迁移时把 sessions.version 刷到 3，避免 assertVersion 误拒。
+ * - v3：新增 `leases` 表（cluster/lease 模式的跨进程写所有权租约；单实例模式
+ *        建表但永不写入）。
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * 表前缀合法字符集：仅允许字母、数字、下划线，防止标识符注入。
@@ -18,7 +20,7 @@ export const SCHEMA_VERSION = 2;
 export const TABLE_PREFIX_PATTERN = /^[A-Za-z0-9_]+$/;
 
 /**
- * 表名集合：由前缀派生的三张表名。
+ * 表名集合：由前缀派生的四张表名。
  */
 export interface TableNames {
   /** 会话头表。 */
@@ -27,6 +29,8 @@ export interface TableNames {
   readonly events: string;
   /** schema 版本表。 */
   readonly meta: string;
+  /** 写所有权租约表（cluster/lease 模式）。 */
+  readonly leases: string;
 }
 
 /**
@@ -43,7 +47,7 @@ export function assertTablePrefix(prefix: string): string {
 }
 
 /**
- * 由合法前缀派生三张表名。
+ * 由合法前缀派生四张表名。
  * @param prefix - 已校验的表前缀。
  * @returns 表名集合。
  */
@@ -53,6 +57,7 @@ export function tableNames(prefix: string): TableNames {
     sessions: `${prefix}sessions`,
     events: `${prefix}events`,
     meta: `${prefix}_meta`,
+    leases: `${prefix}leases`,
   };
 }
 
@@ -113,6 +118,26 @@ COMMENT='schema 版本表：记录已应用的迁移版本';
 }
 
 /**
+ * leases 表 DDL（幂等建表）。cluster/lease 模式的写所有权租约；**刻意不建外键**，
+ * 因为 `create` 懒物化（首个 append/flush 前 sessions 行尚不存在）。列均 epoch 毫秒。
+ * @param name - leases 表名。
+ * @returns DDL 语句。
+ */
+export function leasesDdl(name: string): string {
+  return `CREATE TABLE IF NOT EXISTS \`${name}\` (
+  session_id        VARCHAR(255) NOT NULL COMMENT '会话 id；主键；逻辑对应 sessions.session_id（不建外键，兼容懒物化）',
+  owner_id          VARCHAR(255) NOT NULL COMMENT '写所有者标识（hostname+pid+uuid）；续租/释放归属校验',
+  fence_token       BIGINT       NOT NULL COMMENT '围栏令牌；接管时 +1；append 时校验，陈旧 writer 必被拒',
+  acquired_at       BIGINT       NOT NULL COMMENT '认领时间（epoch 毫秒）',
+  expires_at        BIGINT       NOT NULL COMMENT '租约到期时间（epoch 毫秒）；<= now 即可被接管',
+  last_heartbeat_at BIGINT       NOT NULL COMMENT '最近一次成功续租时间（epoch 毫秒）',
+  PRIMARY KEY (session_id),
+  KEY idx_expires (expires_at)
+) ENGINE=InnoDB COMMENT='会话写所有权租约表（cluster/lease 模式；单实例模式建表但不写入）';
+`;
+}
+
+/**
  * schema 迁移选项。
  */
 export interface EnsureSchemaOptions {
@@ -129,6 +154,7 @@ export interface EnsureSchemaOptions {
  *   旧版本（0.1.2-rc.1）写入了 v0；新版本（0.1.5+）的 assertVersion 会拒读 v0，
  *   因此迁移必须把 sessions.version 一次性刷到 SESSION_FORMAT_VERSION (3)。
  *   seed_length 列语义不变（保持 isSeeded 时存 inheritedEventCount）。
+ * - v2 → v3：新增 `leases` 表；纯 DDL（由 ensureSchema 的幂等建表覆盖），无数据迁移。
  *
  * 迁移是幂等的：再跑一次不会重复刷（更新 where 子句限定旧版本）。
  *
@@ -172,6 +198,7 @@ export async function ensureSchema(
   await pool.query(metaDdl(names.meta));
   await pool.query(sessionsDdl(names.sessions));
   await pool.query(eventsDdl(names.events, names.sessions));
+  await pool.query(leasesDdl(names.leases));
 
   // 读取已应用的最大版本。
   const [rows] = await pool.query<RowDataPacket[]>(

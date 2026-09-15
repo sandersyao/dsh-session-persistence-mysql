@@ -5,7 +5,10 @@ import {
   type SessionId,
   SessionLogOffset,
 } from "@deepseek-ai/dsh-session";
-import { SessionPersistenceRevision } from "@deepseek-ai/dsh-session-persistence";
+import {
+  SessionOwnershipLostError,
+  SessionPersistenceRevision,
+} from "@deepseek-ai/dsh-session-persistence";
 import { describe, expect, it } from "vitest";
 
 import type { MysqlBackend } from "../../src/mysql-backend.js";
@@ -41,6 +44,10 @@ class FakeStorage implements MysqlHandleStorage {
   headerWrites = 0;
   storedEvents: readonly SessionEvent[] = [];
   failBatch = false;
+  renewOk = true;
+  renewThrows = false;
+  renewCalls = 0;
+  releaseCalls = 0;
 
   async persistBatch(
     _header: SessionHeader,
@@ -76,6 +83,16 @@ class FakeStorage implements MysqlHandleStorage {
 
   async hasSession(): Promise<boolean> {
     return this.storedEvents.length > 0;
+  }
+
+  async renewLease(): Promise<boolean> {
+    this.renewCalls += 1;
+    if (this.renewThrows) throw new Error("simulated renew failure");
+    return this.renewOk;
+  }
+
+  async releaseLease(): Promise<void> {
+    this.releaseCalls += 1;
   }
 }
 
@@ -201,7 +218,7 @@ describe("MysqlSessionHandle / MysqlBackendTracker（fake storage）", () => {
 
     const storage = new FakeStorage();
     tracker.claimWrite("w1" as SessionId);
-    const h = makeHandle(tracker, storage, "w1", "write", state(true));
+    makeHandle(tracker, storage, "w1", "write", state(true));
     handlers.get("session/event")?.({ id: "w1" }, ev(0));
     await handlers.get("session/flush")?.({ id: "w1" });
     handlers.get("session/disposed")?.({ id: "w1" });
@@ -243,5 +260,63 @@ describe("MysqlSessionHandle / MysqlBackendTracker（fake storage）", () => {
       state(false),
     );
     expect(h).toBeInstanceOf(MysqlSessionHandle);
+  });
+
+  it("心跳：续租命中 0 行达阈值即判丢锁，后续 append 抛 SessionOwnershipLostError", async () => {
+    const tracker = new MysqlBackendTracker("hb");
+    const storage = new FakeStorage();
+    storage.renewOk = false;
+    const h = new MysqlSessionHandle(
+      storage,
+      tracker,
+      "hb1" as SessionId,
+      header("hb1"),
+      "write",
+      state(true),
+      { ownerId: "o", fenceToken: 1, ttlMs: 1000, heartbeatIntervalMs: 5, missThreshold: 1 },
+    );
+    tracker.adopt(h);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(storage.renewCalls).toBeGreaterThanOrEqual(1);
+    await expect(h.append(balancedTurnEvents(0))).rejects.toBeInstanceOf(SessionOwnershipLostError);
+    await h.close();
+  });
+
+  it("心跳：瞬时异常未达阈值不误杀", async () => {
+    const tracker = new MysqlBackendTracker("hb2");
+    const storage = new FakeStorage();
+    storage.renewThrows = true;
+    const h = new MysqlSessionHandle(
+      storage,
+      tracker,
+      "hb2" as SessionId,
+      header("hb2"),
+      "write",
+      state(true),
+      { ownerId: "o", fenceToken: 1, ttlMs: 1000, heartbeatIntervalMs: 5, missThreshold: 100 },
+    );
+    tracker.adopt(h);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(storage.renewCalls).toBeGreaterThanOrEqual(1);
+    await h.append(balancedTurnEvents(0));
+    expect(storage.persisted).toHaveLength(1);
+    await h.close();
+  });
+
+  it("close 释放租约（非删除式）", async () => {
+    const tracker = new MysqlBackendTracker("rel");
+    const storage = new FakeStorage();
+    const h = new MysqlSessionHandle(
+      storage,
+      tracker,
+      "rel1" as SessionId,
+      header("rel1"),
+      "write",
+      state(true),
+      { ownerId: "o", fenceToken: 7, ttlMs: 1000, heartbeatIntervalMs: 1000, missThreshold: 1 },
+    );
+    tracker.adopt(h);
+    await h.close();
+    expect(storage.releaseCalls).toBe(1);
   });
 });

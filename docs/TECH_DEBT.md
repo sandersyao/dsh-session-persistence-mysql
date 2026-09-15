@@ -29,3 +29,10 @@
 - **状态**：resolved（2026-09-01）
 - **说明**：`mysql-backend.ts` 的死锁重试（`ER_LOCK_DEADLOCK`）与跨库 `close()` 分支此前缺定向测试。
 - **处理**：新增 `test/unit/mysql-backend.test.ts`（4 例）——mock 池注入瞬时/持续死锁验证重试与放弃语义；同库/异库 `close()` 验证只关一次/各关一次。
+
+## TD-008 — 跨进程租约：多主 lease-primary 与租约行清扫暂缓
+- **状态**：deferred（2026-09-10，T7）
+- **说明**：租约模式（`cluster.lease`）已落地单库版本——认领/心跳/释放与 `append` 内 fence 校验都在 `writePool` 写事务中，`close` 为非删除式释放（仅清 `owner_id`/`expires_at`，保留 `fence_token`）以维持 per-row fence 单调。以下两点未实现：
+  1. **多主 / 读写分离拓扑**：独立的 lease-primary 连接（`cluster.lease.leaseConnection`）与跨库 fence 校验缺失；多主下仍需人工保证 `leases` 只由单一主库写入。
+  2. **租约行清扫**：已释放/过期的行不会被回收，长期累积。
+- **处理计划**：两项都依赖把 per-row `fence_token = fence_token + 1` 换成**全局单调 fence 序列**（可删行且不复位），再加周期性 sweeper 与 `leaseConnection` 支持；作为独立后续任务推进。当前单主库语义正确且行数有界（每活跃会话一行）。

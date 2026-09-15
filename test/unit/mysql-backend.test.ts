@@ -38,6 +38,15 @@ function minimalSettings(tablePrefix = "t_"): MysqlSettings {
     },
     pool: { poolSize: 1, minIdle: 0, idleTimeout: 1000, acquireTimeout: 1000, queueLimit: 0 },
     security: { encryptionKey: undefined, schemaAutoMigrate: true },
+    cluster: {
+      lease: {
+        enabled: false,
+        ttlMs: 20_000,
+        heartbeatIntervalMs: 7_000,
+        heartbeatMissThreshold: 2,
+        ownerId: "",
+      },
+    },
   };
 }
 

@@ -2,7 +2,12 @@ import { Context } from "@deepseek-ai/cordis";
 import SessionStore from "@deepseek-ai/dsh-session";
 import type { Pool } from "mysql2/promise";
 
-import { loadSettingsFromEnv, type MysqlSettings, mergeSettings } from "../../src/config.js";
+import {
+  loadSettingsFromEnv,
+  type MysqlSettings,
+  mergeSettings,
+  type SettingsOverrides,
+} from "../../src/config.js";
 import { MysqlSessionPersistence } from "../../src/index.js";
 import { MysqlBackend } from "../../src/mysql-backend.js";
 import { createReadPool, createWritePool } from "../../src/pool.js";
@@ -33,12 +38,17 @@ export interface TestDbHandle {
 
 /**
  * 装配一套隔离的 MySQL 测试环境（唯一表前缀 + schema + 后端 + 服务）。
+ * @param overrides - 可选的设置覆盖（如开启 cluster.lease）；tablePrefix 始终强制为本次唯一前缀。
  * @returns 测试句柄。
  */
-export async function setupTestDb(): Promise<TestDbHandle> {
+export async function setupTestDb(overrides: SettingsOverrides = {}): Promise<TestDbHandle> {
   const base = loadSettingsFromEnv();
   const prefix = `t_${Date.now().toString(36)}_${runCounter++}_${Math.random().toString(36).slice(2, 10)}_`;
-  const settings = mergeSettings(base, { connection: { tablePrefix: prefix } });
+  const merged: SettingsOverrides = {
+    ...overrides,
+    connection: { ...overrides.connection, tablePrefix: prefix },
+  };
+  const settings = mergeSettings(base, merged);
   const writePool = createWritePool(settings.connection, settings.pool);
   const readPool = createReadPool(settings.connection, settings.readConnection, settings.pool);
   const shared = readPool === writePool;
@@ -47,7 +57,7 @@ export async function setupTestDb(): Promise<TestDbHandle> {
   const ctx = new Context();
   await ctx.plugin(SessionStore);
   // 关键：把本次测试的 tablePrefix 一并传给 persistence，使插件使用与 setup 同套表。
-  const persistence = new MysqlSessionPersistence(ctx, { connection: { tablePrefix: prefix } });
+  const persistence = new MysqlSessionPersistence(ctx, merged);
   await persistence[Symbol.for("cordis.init")]?.();
 
   const dispose = async () => {
@@ -59,7 +69,7 @@ export async function setupTestDb(): Promise<TestDbHandle> {
     }
     const names = tableNames(prefix);
     await writePool.query(
-      `DROP TABLE IF EXISTS \`${names.events}\`, \`${names.sessions}\`, \`${names.meta}\``,
+      `DROP TABLE IF EXISTS \`${names.events}\`, \`${names.sessions}\`, \`${names.meta}\`, \`${names.leases}\``,
     );
     if (shared) {
       await writePool.end();

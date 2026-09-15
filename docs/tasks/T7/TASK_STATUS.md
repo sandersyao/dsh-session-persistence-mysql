@@ -1,6 +1,6 @@
 # T7 跨进程租约模式（cluster/lease）实现
 
-**状态**：planned（未开始；设计先行）
+**状态**：completed（2026-09-10）
 **依赖**：T6（文档收尾与发布前对齐）
 **设计来源**：`docs/LEASE_MODE_DESIGN.md`（唯一权威；实现时逐节核对）
 
@@ -29,23 +29,28 @@
 | 8 | 表接线缺失 | 已补：`tableNames()` / cleanup / db / smoke / 迁移接线（§8 / §11）。 |
 | 9 | 时间单位混用 | 已改：一律应用层 epoch 毫秒、以 `?` 绑定（§4.1/§4.2/§4.4/§6.2）。 |
 | 10 | 心跳生命周期 | 已补：close / abort / asyncDispose / tracker sweep / 失锁 均清理（§11）。 |
-| 11 | leaseConnection 生命周期 | 已补：纳入 `dispose()`；fence 读固定同写事务（§4.3 / §11）。 |
+| 11 | leaseConnection 生命周期 | 已补；**本轮实现决定暂缓 leaseConnection**（见下方“实现范围”与 TD-008）。 |
 | 12 | 悬空附图 | 已补：§5.3 增加 mermaid 时序图。 |
 | 13 | enabled=false 建表 | 已定：统一建表、仅不写（§8）。 |
 | 14 | sweeper `INTERVAL ?` | 已改：应用层算 cutoff 后 `WHERE expires_at < ?`（§6.2）。 |
 | 15 | 行号核实 | 已更新引用（§1.1 / §4.3 / §11）。 |
 | 16 | 测试补充 | 已补：幂等×fence 顺序 + fence 不复位 + 兼容（§10）。 |
 
-## 实现 TODO（设计与源码核对后拆分）
-- [ ] `src/schema.ts`：`${prefix}leases` DDL、`tableNames()` 扩展、`SCHEMA_VERSION 2→3` + 迁移。
-- [ ] `src/mysql-handle.ts`：`claimLease`/`renewLease`/`releaseLease`；tracker 关联 lease 状态与心跳生命周期。
-- [ ] `src/index.ts`：`open('write')`/`create` 认领（失败回滚本地 claim）；handle 携带 owner_id/fence/heartbeat。
-- [ ] `src/mysql-backend.ts`：`persistBatchOnce` 写事务内 fence 校验（在幂等/重复键分支前）；fence 不符抛 `SessionOwnershipLostError`。
-- [ ] `src/config.ts`：`cluster.lease.*` schemastery 配置（默认 enabled=false）。
-- [ ] 心跳：`setInterval(ttl/3)` + 机会式续租；连续 N 次失败判失锁。
-- [ ] 测试清理接线（cleanup/db/smoke）+ 契约测试。
+## 实现结果（2026-09-10）
+- [x] `src/schema.ts`：`${prefix}leases` DDL（无 FK）、`tableNames()` 扩展、`SCHEMA_VERSION 2→3` + 迁移。
+- [x] `src/mysql-backend.ts`：`claimLease`/`renewLease`/`releaseLease`（非删除式释放）+ `assertLeaseFence`；`persistBatch`/`persistBatchOnce`/`persistHeader` 写事务内 fence 校验先于幂等分支；同事务机会式续租。
+- [x] `src/mysql-handle.ts`：handle 持有 lease/fence + 心跳定时器；`close` 先 heartbeat 后非删除式 release。
+- [x] `src/index.ts`：`open('write')`/`create` 认领租约（失败释放）；`ownerId = hostname:pid:uuid`。
+- [x] `src/config.ts`：`cluster.lease.*`（默认 `enabled=false`；`SESSION_LEASE_*` / `MYSQL_LEASE_*` 优先）。
+- [x] 心跳 + 连续失败阈值判失锁。
+- [x] 测试接线（`test/helpers/db.ts` DROP 列表）+ 契约测试（`test/integration/lease.test.ts` 6 例、`test/unit/handle-unit.test.ts` +3、schema/backend 单测修订）。
+- [x] 文档回填：`docs/LEASE_MODE_DESIGN.md` §8.5/§9/§11/§12；`docs/TECH_DEBT.{md,json}` TD-008；CHANGELOG Unreleased。
 
-## 验收门禁
-- enabled=false：既有 75 测试全绿，行为与单实例一致。
-- enabled=true：争抢 / 围栏 / 崩溃接管 / 续租抖动 / 幂等×fence 顺序 全绿。
-- `typecheck` 0、`biome`、`build`、`test:coverage` lines≥90。
+### 验收门禁（全绿）
+- `pnpm lint`：0 error；`pnpm typecheck`：0 error；`pnpm build`：成功。
+- `pnpm test:coverage`：**85 测试通过**，All files lines **97.14%** / funcs 98.85% / branches 85.84%（阈值 lines≥90 满足）。
+- `enabled=false`：行为与单实例逐字节一致（既有套件全绿）。
+
+### 实现范围收窄（相对设计文档）
+- 租约 DML 与 fence 校验**一律在 `writePool` 写事务内**（隐含 `usePrimaryOnly=true`），读写分离仅用于 events/sessions 回放读。
+- **独立 `cluster.lease.leaseConnection`（多主 lease-primary）与租约行 sweeper 暂缓** → TD-008（需全局单调 fence 序列）。单主库下语义完整且行数有界。
