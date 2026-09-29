@@ -1,8 +1,8 @@
 # 跨进程租约模式设计文档 —— dsh-session-persistence-mysql
 
-> **状态：设计先行（status: design），当前未实现。** 本文件描述在现有"单实例 Provider"之上新增一个 **opt-in 的 cluster/lease 模式**，使多个 `web` profile 实例（不同机器）共享同一 MySQL 后端时，对任一会话只有一个实例能驱动其 turn，且不依赖 dsh 核心改动。
+> **状态：已实现（status: implemented，v0.1.5-rc.2 起；当前适配 dsh 0.2.0-rc.1）。** 本文件描述在现有"单实例 Provider"之上新增一个 **opt-in 的 cluster/lease 模式**，使多个 `web` profile 实例（不同机器）共享同一 MySQL 后端时，对任一会话只有一个实例能驱动其 turn，且不依赖 dsh 核心改动。实现落在 `src/{schema,config,mysql-backend,mysql-handle,index}.ts`，契约测试见 `test/integration/lease.test.ts`，§11 TODO 已全部落地。
 >
-> 任何偏离本文件的行为都应先修订本文件。实现阶段以本文为唯一权威来源，逐节核对设计约定。
+> 本文件仍是租约语义的唯一权威来源（表结构 §3、操作语义 §4、恢复语义 §6、配置 §9）；代码与本文冲突时，先修订本文或修正代码，二者保持同步。多主/独立 lease-primary 与租约行清扫等暂缓项见 §12 与 `TD-008`。
 
 ## 1. 背景与动机
 

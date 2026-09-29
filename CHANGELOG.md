@@ -1,6 +1,15 @@
 # Changelog
 
-本项目为 Pre-1.0，遵循 [语义化版本](https://semver.org/)。插件版本对齐当前运行的 dsh：`0.1.x` 对齐 `^0.1.5-rc.x`。
+本项目为 Pre-1.0，遵循 [语义化版本](https://semver.org/)。插件版本对齐当前运行的 dsh：`0.2.x` 对齐 `^0.2.0-rc.x`。
+
+## 0.2.0-rc.1 (2026-09-15) —— 适配 dsh 0.2.0-rc.1 契约
+
+### 适配
+- peer/dev 升至 `@deepseek-ai/dsh-session` / `dsh-session-persistence` `^0.2.0-rc.1`（cordis `^4.0.4`；0.2.0 要求 `~4.0.4`）。
+- dsh `SESSION_FORMAT_VERSION 3→4`：本插件读路径按**运行时**版本盖章（`headerFromRow`），存量 `sessions.version=3` 行不阻塞；事件词汇表向后包含，0.1.5 事件在 v4 校验下仍被接受。
+- 新增集成测试 `test/integration/format-compat.test.ts`：用遗留 `version=3` 头 + 0.1.5 兼容事件落盘，验证后端读与 `open('read')` 均可成功读出。
+- schema 结构版本 `SCHEMA_VERSION` 仍为 3：本次无 DDL 变更，且与会话日志格式 `SESSION_FORMAT_VERSION` 已解耦（详见 `src/schema.ts` 注释）。
+- 兼容边界：v4 新增事件类型（`developer/message` / `image/offload` / `workspace/changes`）与 `forked` turn 结束原因；反向用旧运行时读 v4 日志仍 fail-closed。
 
 ## 0.1.5-rc.2 (2026-09-15)
 

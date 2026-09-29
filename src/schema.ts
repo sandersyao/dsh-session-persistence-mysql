@@ -6,11 +6,15 @@ import type { Pool, RowDataPacket } from "mysql2/promise";
  *
  * 版本语义：
  * - v1：0.1.2 时代的初始 schema（version 列写 0，seed_length 仅作 isSeeded 标志）。
- * - v2：0.1.5 起的会话格式升级——版本号对齐到 SESSION_FORMAT_VERSION (3)，
+ * - v2：0.1.5 起的会话格式升级——当时版本号对齐到 SESSION_FORMAT_VERSION（3；0.2.0-rc.1 起为 4），
  *        seed_length 列语义不变（仍是 isSeeded 时存 inheritedEventCount），
  *        旧 v0 行在迁移时把 sessions.version 刷到 3，避免 assertVersion 误拒。
  * - v3：新增 `leases` 表（cluster/lease 模式的跨进程写所有权租约；单实例模式
  *        建表但永不写入）。
+ *
+ * 注意：SCHEMA_VERSION 只跟踪**表结构与迁移步骤**，与 dsh 的会话日志格式
+ * `SESSION_FORMAT_VERSION` 是两回事。二者在 v2（会话格式 3）时数值相同；
+ * 会话格式升到 4（dsh 0.2.0-rc.1）未引入 DDL 变更，故本值仍为 3。
  */
 export const SCHEMA_VERSION = 3;
 
@@ -69,7 +73,7 @@ export function tableNames(prefix: string): TableNames {
 export function sessionsDdl(name: string): string {
   return `CREATE TABLE IF NOT EXISTS \`${name}\` (
   session_id       VARCHAR(255) NOT NULL COMMENT '品牌化会话 id；唯一标识。仅参数化绑定，绝不作 SQL 标识符拼接',
-  version          INT NOT NULL COMMENT '会话头格式版本；写入 SESSION_FORMAT_VERSION (v3)。schema 迁移会把旧 v0 行刷到当前版本',
+  version          INT NOT NULL COMMENT '会话头格式版本；跟随运行时 SESSION_FORMAT_VERSION（当前 v4）。读路径按运行时版本盖章，存量旧值不阻塞；迁移会把旧 v0 行刷到当前版本',
   created_at       BIGINT NOT NULL COMMENT '会话创建时间（epoch 毫秒）；重建时还原原始 createdAt',
   cwd              TEXT NULL COMMENT '会话工作目录（可选），用于导航/隔离',
   parent_session   VARCHAR(255) NULL COMMENT '父会话 id（lineage，可选）',
@@ -151,8 +155,9 @@ export interface EnsureSchemaOptions {
  * 执行一次 schema 迁移。已知迁移列表（顺序执行）：
  *
  * - v1 → v2：把 sessions.version < SESSION_FORMAT_VERSION 的行升级到当前格式版本。
- *   旧版本（0.1.2-rc.1）写入了 v0；新版本（0.1.5+）的 assertVersion 会拒读 v0，
- *   因此迁移必须把 sessions.version 一次性刷到 SESSION_FORMAT_VERSION (3)。
+ *   旧版本（0.1.2-rc.1）写入了 v0；0.1.5+ 的读路径会把内存头盖章为运行时
+ *   SESSION_FORMAT_VERSION，因此迁移把 sessions.version 一次性刷到当前值
+ *   （0.2.0-rc.1 起为 4）。
  *   seed_length 列语义不变（保持 isSeeded 时存 inheritedEventCount）。
  * - v2 → v3：新增 `leases` 表；纯 DDL（由 ensureSchema 的幂等建表覆盖），无数据迁移。
  *
