@@ -112,9 +112,11 @@ export function eventsDdl(name: string, sessionsName: string): string {
  * @returns DDL 语句。
  */
 export function metaDdl(name: string): string {
+  // 表达式默认值 DEFAULT (expr) 是 MySQL 8.0.13+ 特性；OceanBase（MySQL 5.7 兼容模式）
+  // 不支持，故用字面量默认值，applied_at 由 INSERT 显式提供。
   return `CREATE TABLE IF NOT EXISTS \`${name}\` (
   version INT NOT NULL,
-  applied_at BIGINT NOT NULL DEFAULT (UNIX_TIMESTAMP() * 1000),
+  applied_at BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (version)
 ) ENGINE=InnoDB
 COMMENT='schema 版本表：记录已应用的迁移版本';
@@ -223,6 +225,6 @@ export async function ensureSchema(
 
   await applyMigrations(pool, prefix, applied);
 
-  // 记录新版本。
-  await pool.query(`INSERT INTO \`${names.meta}\` (version) VALUES (?)`, [expected]);
+  // 记录新版本（applied_at 显式提供，兼容不支持表达式默认值的 MySQL 5.7 / OceanBase）。
+  await pool.query(`INSERT INTO \`${names.meta}\` (version, applied_at) VALUES (?, ?)`, [expected, Date.now()]);
 }
